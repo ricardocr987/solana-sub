@@ -1,4 +1,4 @@
-import { Connection } from '@solana/web3.js';
+import { createSolanaRpc } from '@solana/kit';
 
 const requiredEnvVariables = [
   'QUICKNODE_RPC_URL',
@@ -12,16 +12,9 @@ requiredEnvVariables.forEach((variable) => {
   }
 });
 
-// Environment variables
-const QUICKNODE_RPC_URL = process.env.QUICKNODE_RPC_URL;
+const QUICKNODE_RPC_URL = process.env.QUICKNODE_RPC_URL!;
+export const QUICKNODE_RPC = createSolanaRpc(QUICKNODE_RPC_URL);
 
-// RPC Connections
-export const QUICKNODE_RPC = new Connection(QUICKNODE_RPC_URL!, {
-  commitment: 'confirmed',
-  confirmTransactionInitialTimeout: 60000,
-});
-
-// Configuration object
 export const config = {
   QUICKNODE_RPC,
   QUICKNODE_RPC_URL,

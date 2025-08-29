@@ -1,9 +1,4 @@
 import { useState } from 'react'
-import { treaty } from '@elysiajs/eden'
-import type { App } from '@backend/index'
-
-// Create the Eden Treaty client
-const api = treaty<App>('http://localhost:3000')
 
 interface SubscriptionRequest {
   account: string
@@ -30,13 +25,20 @@ export const useSubscription = () => {
     setError(null)
     
     try {
-      const { data, error } = await api.subscription.transaction.post(request)
+      const response = await fetch("/api/subscription/transaction", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(request)
+      })
 
-      if (error) {
-        const errorMessage = typeof error.value === 'string' ? error.value : 'Failed to get subscription transaction'
-        throw new Error(errorMessage)
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.message || 'Failed to get subscription transaction')
       }
 
+      const data = await response.json()
       return data
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
@@ -52,13 +54,20 @@ export const useSubscription = () => {
     setError(null)
     
     try {
-      const { data, error } = await api.confirm.transactions.post(request)
+      const response = await fetch("/api/confirm/transactions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(request)
+      })
 
-      if (error) {
-        const errorMessage = typeof error.value === 'string' ? error.value : 'Failed to confirm subscription'
-        throw new Error(errorMessage)
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.message || 'Failed to confirm subscription')
       }
 
+      const data = await response.json()
       return data
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'

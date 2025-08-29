@@ -47,6 +47,52 @@ function initializeDatabase() {
 // Initialize database when module is loaded
 initializeDatabase();
 
+/*
+// Add some sample data for demonstration
+function addSampleData() {
+  try {
+    // Add sample subscription
+    const sampleWallet = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM";
+    const sampleEndDate = new Date();
+    sampleEndDate.setDate(sampleEndDate.getDate() + 30); // 30 days from now
+    
+    db.run(`
+      INSERT OR IGNORE INTO subscriptions (wallet_address, subscription_end_date)
+      VALUES (?, ?)
+    `, [sampleWallet, sampleEndDate.toISOString()]);
+    
+    // Add sample payment
+    const samplePaymentDate = new Date();
+    samplePaymentDate.setDate(samplePaymentDate.getDate() - 5); // 5 days ago
+    
+    db.run(`
+      INSERT OR IGNORE INTO payments (
+        transaction_hash, 
+        wallet_address, 
+        amount_usdc, 
+        payment_date, 
+        subscription_duration_days,
+        subscription_end_date,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `, [
+      'sample-transaction-hash-123',
+      sampleWallet,
+      49.00,
+      samplePaymentDate.toISOString(),
+      30,
+      sampleEndDate.toISOString(),
+      'confirmed'
+    ]);
+    
+    console.log('Sample data added successfully');
+  } catch (error) {
+    console.error('Error adding sample data:', error);
+  }
+}
+
+// Add sample data after initialization
+addSampleData();*/
 // Types for our database entities
 export interface Payment {
   id?: number;
@@ -64,7 +110,7 @@ export interface Payment {
 export interface Subscription {
   id?: number;
   wallet_address: string;
-  subscription_end_date?: Date;
+  subscription_end_date?: string;
   last_updated?: Date;
   created_at?: Date;
 }
@@ -221,13 +267,47 @@ export async function getSubscriptionByWallet(wallet_address: string): Promise<S
 
     return {
       ...result,
-      subscription_end_date: result.subscription_end_date ? new Date(result.subscription_end_date) : undefined,
+      subscription_end_date: result.subscription_end_date || undefined,
       last_updated: result.last_updated ? new Date(result.last_updated) : undefined,
       created_at: result.created_at ? new Date(result.created_at) : undefined,
     } as Subscription;
   } catch (error) {
     console.error(`Error getting subscription: ${error}`);
     return null;
+  }
+}
+
+/**
+ * Creates or updates a subscription record for a wallet
+ */
+export async function upsertSubscription(wallet_address: string, subscription_end_date: Date): Promise<boolean> {
+  try {
+    // Check if subscription already exists
+    const existingSubscription = await getSubscriptionByWallet(wallet_address);
+    
+    if (existingSubscription) {
+      // Update existing subscription
+      const stmt = db.prepare(`
+        UPDATE subscriptions 
+        SET subscription_end_date = ?, last_updated = CURRENT_TIMESTAMP
+        WHERE wallet_address = ?
+      `);
+      
+      const result = stmt.run(subscription_end_date.toISOString(), wallet_address);
+      return result.changes > 0;
+    } else {
+      // Create new subscription
+      const stmt = db.prepare(`
+        INSERT INTO subscriptions (wallet_address, subscription_end_date)
+        VALUES (?, ?)
+      `);
+      
+      const result = stmt.run(wallet_address, subscription_end_date.toISOString());
+      return result.changes > 0;
+    }
+  } catch (error) {
+    console.error(`Error upserting subscription: ${error}`);
+    return false;
   }
 }
 

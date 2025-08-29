@@ -1,79 +1,25 @@
-import { VersionedTransactionResponse } from "@solana/web3.js";
+import {
+  type Base64EncodedWireTransaction,
+  createSolanaRpcSubscriptions,
+} from '@solana/kit';
 import { config } from '../config';
+import { parseSubscriptionTransaction, parseSubscriptionTransactionFromSignature } from './parseSubscription';
 
-const TX_RETRY_INTERVAL = 2000; // 2 seconds between retries
-
-/**
- * Resends a transaction with optimized settings
- * @param txnBuffer - The transaction buffer to resend
- * @returns The transaction signature
- */
-export async function sendTransaction(txnBuffer: Buffer): Promise<string> {
-  return await config.QUICKNODE_RPC.sendRawTransaction(txnBuffer, {
-    skipPreflight: true, // Skip preflight for faster delivery
-    maxRetries: 0, // Disable RPC retry queues
-    preflightCommitment: 'confirmed', // Use confirmed commitment for blockhash
-  });
-}
+// USDC mint address for subscription payments
+const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+// System program for SOL transfers
+const SYSTEM_PROGRAM = '11111111111111111111111111111111';
+// Token program for SPL token transfers
+const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+// Receiver address for subscription payments (should match your backend config)
+const RECEIVER_ADDRESS = config.RECEIVER;
 
 /**
- * Utility function to handle transaction confirmation retries with resending
- * @param signature - The transaction signature to confirm
- * @param txnBuffer - The transaction buffer to resend if needed
- * @param maxRetries - Maximum number of retry attempts
- * @returns The confirmed signature or empty string if not confirmed
- */
-export async function retryConfirmation(
-  signature: string, 
-  txnBuffer: Buffer
-): Promise<string> {
-  let retries = 0;
-  const maxRetries = 1; // Only retry once as requested
-
-  while (retries <= maxRetries) {
-    try {
-      if (retries === 0) {
-        // First attempt - try to confirm existing signature
-        const confirmed = await confirmSignature(signature);
-        if (confirmed) return confirmed;
-      }
-      
-      // Retry attempt - resend transaction
-      if (retries > 0) {
-        console.log(`Retry ${retries}/${maxRetries}: resending transaction for signature ${signature}`);
-        await new Promise(resolve => setTimeout(resolve, TX_RETRY_INTERVAL));
-        
-        // Resend transaction and get new signature
-        const newSignature = await sendTransaction(txnBuffer);
-        console.log(`New signature after retry: ${newSignature}`);
-        
-        // Try to confirm the new signature
-        const confirmed = await confirmSignature(newSignature);
-        if (confirmed) return confirmed;
-      }
-      
-      retries++;
-    } catch (error) {
-      console.error(`Retry ${retries}/${maxRetries} failed:`, error);
-      retries++;
-      
-      if (retries <= maxRetries) {
-        // Wait before retrying
-        await new Promise(resolve => setTimeout(resolve, TX_RETRY_INTERVAL));
-      }
-    }
-  }
-
-  console.log(`Failed to confirm transaction after ${maxRetries + 1} attempts`);
-  return ''; // Return empty string if all attempts failed
-}
-
-/**
- * Confirms a single transaction by sending it to the RPC endpoint.
+ * Confirms a transaction by sending it to the RPC endpoint and waiting for confirmation.
  * The function implements optimized transaction delivery practices:
  * - Uses maxRetries: 0 to avoid RPC retry queues
  * - Includes skipPreflight: true for faster delivery
- * - Uses client-side retry logic with transaction resending
+ * - Uses RPC subscriptions for proper confirmation
  * - Uses confirmed commitment level for blockhash
  * 
  * @param transaction - The transaction string in base64 format
@@ -86,20 +32,95 @@ export async function confirmTransaction(transaction: string): Promise<string> {
     }
 
     console.log('confirmTransaction', transaction);
-
-    const txnBuffer = Buffer.from(transaction, 'base64');
-          
-    // Send transaction with optimized settings
-    const signature = await sendTransaction(txnBuffer);
-
-    console.log('unverified signature', signature);
     
-    // Use retryConfirmation to handle retries and resending
-    return await retryConfirmation(signature, txnBuffer);
+    // Use Solana Kit RPC for sending transactions
+    const selectedRpc = config.QUICKNODE_RPC;
+    
+    const txnBuffer = Buffer.from(transaction, 'base64');
+    const base64Transaction = txnBuffer.toString('base64') as Base64EncodedWireTransaction;
+    
+    // Send transaction using Solana Kit
+    const signature = await selectedRpc.sendTransaction(base64Transaction, {
+      skipPreflight: true,
+      maxRetries: 0n,
+      preflightCommitment: 'confirmed',
+    }).send();
+
+    console.log('Transaction sent with signature:', signature);
+    
+    // Wait for confirmation using RPC subscriptions
+    const confirmedSignature = await waitForTransactionConfirmation(signature);
+    return confirmedSignature;
   } catch (error) {
     console.error('Error in confirmTransaction:', error);
     return ''; // Return empty string on error
   }
+}
+
+/**
+ * Waits for transaction confirmation using RPC subscriptions
+ * @param signature - The transaction signature to confirm
+ * @returns The confirmed signature or empty string if failed
+ */
+async function waitForTransactionConfirmation(signature: string): Promise<string> {
+  const TIMEOUT_DURATION = 30000; // 30 seconds timeout
+  
+  return new Promise<string>((resolve) => {
+    let timeoutId: NodeJS.Timeout;
+    
+    // Create an RPC subscriptions proxy object
+    const rpcSubscriptions = createSolanaRpcSubscriptions(config.QUICKNODE_RPC_URL || 'wss://api.devnet.solana.com');
+    
+    // Use an AbortController to cancel the subscriptions
+    const abortController = new AbortController();
+    
+    // Subscribe to signature notifications
+    const signatureNotifications = rpcSubscriptions
+      .signatureNotifications(signature as any, { commitment: 'confirmed' })
+      .subscribe({ abortSignal: abortController.signal });
+    
+    // Set timeout
+    timeoutId = setTimeout(() => {
+      console.log(`Timeout reached for signature ${signature} after ${TIMEOUT_DURATION}ms`);
+      abortController.abort();
+      resolve('');
+    }, TIMEOUT_DURATION);
+    
+    // Listen to signature notifications
+    signatureNotifications
+      .then(async (subscription: any) => {
+        try {
+          for await (const notification of subscription) {
+            console.log(`Signature notification for ${signature}:`, notification);
+            
+            if (notification.value?.err) {
+              console.error(`Transaction failed for ${signature}:`, notification.value.err);
+              clearTimeout(timeoutId);
+              abortController.abort();
+              resolve('');
+              return;
+            } else {
+              console.log(`Transaction confirmed for ${signature}`);
+              clearTimeout(timeoutId);
+              abortController.abort();
+              resolve(signature);
+              return;
+            }
+          }
+        } catch (error: any) {
+          console.error(`Error in signature subscription for ${signature}:`, error);
+          clearTimeout(timeoutId);
+          abortController.abort();
+          resolve('');
+        }
+      })
+      .catch((error: any) => {
+        console.error(`Failed to subscribe to signature notifications for ${signature}:`, error);
+        clearTimeout(timeoutId);
+        abortController.abort();
+        resolve('');
+      });
+  });
 }
 
 /**
@@ -142,49 +163,16 @@ export async function confirmTransactions(transactions: string[]): Promise<strin
 }
 
 /**
- * Confirms a transaction signature using onSignature callback
- */
-export async function confirmSignature(signature: string): Promise<string | null> {
-  const TIMEOUT_DURATION = 8000; // 8 seconds timeout
-  console.log(`Starting confirmation for signature: ${signature}`);
-  
-  return new Promise<string | null>((resolve) => {
-    let timeoutId: NodeJS.Timeout;
-    
-    const handleResult = (result: any, context: any) => {
-      console.log(`Confirmation result for ${signature}:`, result);
-      if (result.err) {
-        console.error(`Transaction failed for ${signature}:`, result.err);
-        clearTimeout(timeoutId);
-        resolve(null);
-      } else {
-        console.log(`Transaction confirmed for ${signature}`);
-        clearTimeout(timeoutId);
-        resolve(signature);
-      }
-    };
-
-    config.QUICKNODE_RPC.onSignature(signature, handleResult, 'confirmed');
-    
-    timeoutId = setTimeout(() => {
-      // there are cases that even after the timeout, the transaction is confirmed but we dont receive the notification
-      console.log(`Timeout reached for signature ${signature} after ${TIMEOUT_DURATION}ms`);
-      resolve(null);
-    }, TIMEOUT_DURATION);
-  });
-}
-
-/**
- * Verifies multiple transactions at once using getTransactions
+ * Verifies multiple transactions at once using getParsedTransaction
  * @param signatures - Array of transaction signatures to verify
- * @returns Array of verified signatures (null for failed transactions to maintain position)
+ * @returns Array of verified signatures (empty strings for failed transactions)
  */
 export async function verifyTransactions(signatures: string[]) {
   const backoffIntervals = [500, 1000, 2000]; // ms
   try {
     let pendingSignatures = signatures.map((sig, idx) => ({ sig, idx }))
       .filter(item => item.sig !== '');
-    let fetchedMap: Map<string, VersionedTransactionResponse | null> = new Map();
+    let fetchedMap: Map<string, any> = new Map();
 
     console.log('[verifyTransactions] Initial signatures:', signatures);
     console.log('[verifyTransactions] Pending signatures:', pendingSignatures.map(item => item.sig));
@@ -196,20 +184,33 @@ export async function verifyTransactions(signatures: string[]) {
       }
       const sigsToFetch = pendingSignatures.map(item => item.sig);
       console.log(`[verifyTransactions] Attempt ${attempt + 1}, fetching signatures:`, sigsToFetch);
-      const fetched = await config.QUICKNODE_RPC.getTransactions(sigsToFetch, {
-        commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0,
-      });
+      
+      // Use Solana Kit RPC for getting parsed transactions
+      const fetched = await Promise.all(
+        sigsToFetch.map(async sig => {
+          try {
+            const result = await config.QUICKNODE_RPC.getTransaction(sig as any, {
+              commitment: 'confirmed',
+              encoding: 'jsonParsed',
+              maxSupportedTransactionVersion: 0,
+            }).send();
+            return result;
+          } catch (error) {
+            console.error(`Error fetching transaction ${sig}:`, error);
+            return null;
+          }
+        })
+      );
       
       // Create a map of fetched transactions using their signatures as keys
-      const fetchedTxMap = new Map<string, VersionedTransactionResponse | null>();
+      const fetchedTxMap = new Map<string, any>();
       for (let i = 0; i < sigsToFetch.length; i++) {
         const tx = fetched[i];
         const signature = sigsToFetch[i];
         
         if (tx) {
           // Use the transaction's signature to ensure proper linking
-          const txSignature = tx.transaction.signatures[0]; // Get the first signature
+          const txSignature = tx.transaction?.signatures?.[0]; // Get the first signature
           if (txSignature) {
             fetchedTxMap.set(txSignature, tx);
           } else {
@@ -218,7 +219,7 @@ export async function verifyTransactions(signatures: string[]) {
           }
           
           if (tx.meta?.err) {
-            console.log(`[verifyTransactions] Transaction for signature ${signature} has error:`, tx.meta.err);
+            console.log(`[verifyTransactions] Transaction has failure error for signature: ${signature}:`, tx.meta.err);
           } else {
             console.log(`[verifyTransactions] Fetched transaction for signature: ${signature}`);
           }
@@ -241,22 +242,20 @@ export async function verifyTransactions(signatures: string[]) {
       }
     }
 
-    // Create result array maintaining original positions
-    // Use null for failed transactions to clearly indicate failure
-    const verifiedSignatures = signatures.map((sig, index) => {
+    const verifiedSignatures = signatures.map(sig => {
       if (sig === '') {
-        console.log(`[verifyTransactions] Signature at position ${index} is empty string, returning null.`);
-        return null;
+        console.log(`[verifyTransactions] Signature is empty string, returning empty.`);
+        return '';
       }
       const tx = fetchedMap.get(sig);
       if (!tx) {
-        console.log(`[verifyTransactions] No transaction found for signature at position ${index}: ${sig}, returning null.`);
-        return null;
+        console.log(`[verifyTransactions] No transaction found for signature: ${sig}, returning empty.`);
+        return '';
       }
       // Check if transaction has a failure error
       if (tx.meta?.err) {
-        console.log(`[verifyTransactions] Transaction has failure error for signature at position ${index}: ${sig}, returning null.`);
-        return null;
+        console.log(`[verifyTransactions] Transaction has failure error for signature: ${sig}, returning empty.`);
+        return '';
       }
       return sig;
     });
@@ -265,7 +264,9 @@ export async function verifyTransactions(signatures: string[]) {
     return verifiedSignatures;
   } catch (error) {
     console.error('Error verifying transactions:', error);
-    // Return null for all transactions on error to maintain position mapping
-    return signatures.map(() => null);
+    return signatures.map(() => '');
   }
 }
+
+// Export the parsing functions for use in the API
+export { parseSubscriptionTransaction, parseSubscriptionTransactionFromSignature };

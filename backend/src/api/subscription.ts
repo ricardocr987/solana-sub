@@ -1,48 +1,48 @@
 import { Elysia, t } from "elysia";
-import { prepareLegacyTransaction } from "../solana/compute";
+import { prepareTransaction } from '../solana/prepareTransaction';
 import { config } from "../config";
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { BigNumber } from "bignumber.js";
-import { getTokenMetadata } from '../solana/getTokenMetadata';
 import { getTokenBalance } from '../solana/getTokenBalance';
-import { createPaymentInstruction } from '../solana/transfer';
-import { addSubscriptionPayment } from '../db';
+import { transferInstruction } from "../solana/transferInstruction";
+import { address, TransactionSigner } from "@solana/kit";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 const subscription = new Elysia({ prefix: '/subscription' })
-    .post('/transaction', async ({ body: { account, amount: rawAmount } }) => {
+    .post('/transaction', async ({ body: { account, amount: uiAmount } }) => {
         try {
-            const userAddress = new PublicKey(account);
-            const amount = rawAmount.replace(',', '.');
-            const validation = await validateAmount(account, USDC_MINT, amount);
-            if (!validation.isValid) {
+            const amount = uiAmount.replace(',', '.');
+
+            const validate = await validateAmount(account, USDC_MINT, amount);
+            if (!validate.isValid) {
                 return Response.json(
-                    { message: validation.message },
+                    { message: validate.message },
                     { status: 400 }
                 );
             }
 
-            const instructions: TransactionInstruction[] = [];
-            const paymentInstruction = await createPaymentInstruction(
-                userAddress,
-                new PublicKey(config.RECEIVER || ''),
-                USDC_MINT,
-                parseFloat(amount)
-            );
-            instructions.push(paymentInstruction);
-
-            const recentBlockhash = await config.QUICKNODE_RPC.getLatestBlockhash('finalized')
-                .then(res => res.blockhash);
-
-            const transaction = await prepareLegacyTransaction(
-                instructions, 
-                userAddress, 
-                [], 
-                recentBlockhash
+            const signer: TransactionSigner = {
+                address: address(account),
+                signTransactions: () => Promise.resolve([]),
+            };
+            const paymentInstruction = await transferInstruction(
+                signer,
+                BigInt(amount) * BigInt(10 ** 6),
+                address(USDC_MINT),
+                address(config.RECEIVER)
             );
 
-            return { transaction };
+            // Prepare transaction using Solana Kit
+            const transaction = await prepareTransaction(
+                [paymentInstruction],
+                account,
+                {} // Empty lookup table accounts for now
+            );
+
+            return { 
+                transaction,
+                amount: parseFloat(amount)
+            };
         } catch (error) {
             console.error('Error building subscription transaction:', error);
             return Response.json(
@@ -58,6 +58,7 @@ const subscription = new Elysia({ prefix: '/subscription' })
         }),
     }
     )
+    /* webhook notifications could be more reliable that storing on confirmation endpoint
     .post('/transactionListener', async ({ body, headers }) => {
         try {
             const authToken = headers['authorization'];
@@ -95,7 +96,7 @@ const subscription = new Elysia({ prefix: '/subscription' })
                     paymentDetails.signature,
                     paymentDetails.amount,
                     new Date(paymentDetails.timestamp * 1000), // Convert Unix timestamp to Date
-                    paymentDetails.amount === 499 ? 365 : 30
+                    paymentDetails.amount === 2 || paymentDetails.amount === 10 ? 30 : 365
                 );
 
                 console.log('Subscription db status:', success);
@@ -106,17 +107,24 @@ const subscription = new Elysia({ prefix: '/subscription' })
             console.error('Failed to process transactions:', error);
             return { success: false, message: 'Failed to process transactions' };
         }
-    });
+    })*/;
 
 export default subscription;
 
-// IF AMOUNT IS 49 IS MONTHLY, IF AMOUNT IS 499 IS YEARLY
+// IF AMOUNT IS 2 IS MONTHLY PRO I, IF AMOUNT IS 20 IS YEARLY PRO I
+// IF AMOUNT IS 10 IS MONTHLY PRO II, IF AMOUNT IS 100 IS YEARLY PRO II
 function getSubscriptionEndsAt(amount: number) {
-    if (amount === 49) {
-        return Date.now() + 30 * 24 * 60 * 60 * 1000;
+    if (amount === 2) {
+        return Date.now() + 30 * 24 * 60 * 60 * 1000; // Monthly Pro I
     }
-    if (amount === 499) {
-        return Date.now() + 365 * 24 * 60 * 60 * 1000;
+    if (amount === 20) {
+        return Date.now() + 365 * 24 * 60 * 60 * 1000; // Yearly Pro I
+    }
+    if (amount === 10) {
+        return Date.now() + 30 * 24 * 60 * 60 * 1000; // Monthly Pro II
+    }
+    if (amount === 100) {
+        return Date.now() + 365 * 24 * 60 * 60 * 1000; // Yearly Pro II
     }
         
     return null;
@@ -308,20 +316,11 @@ export async function validateAmount(
       };
     }
 
-    const userBalance = new BigNumber(balance);
-
+    const userBalance = new BigNumber(balance.balance);
     if (inputAmount.isGreaterThan(userBalance)) {
-      const metadata = await getTokenMetadata(inputToken);
-      if (!metadata) {
-        return {
-          isValid: false,
-          message: 'Token not found!',
-        };
-      }
-
       return {
         isValid: false,
-        message: `Insufficient balance! You have ${userBalance.toFixed(4)} ${metadata.symbol}`,
+        message: `Insufficient balance! You have ${userBalance.toFixed(4)} USDC`,
       };
     }
 

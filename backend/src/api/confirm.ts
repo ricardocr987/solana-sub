@@ -1,6 +1,6 @@
 import Elysia, { t } from 'elysia';
-import { addPayment, Payment } from '../db';
-import { confirmTransactions, verifyTransactions } from '../solana/confirm';
+import { addPayment, upsertSubscription, Payment } from '../db';
+import { confirmTransactions, verifyTransactions, parseSubscriptionTransaction } from '../solana/confirm';
 
 // Elysia endpoint
 const confirm = new Elysia({ prefix: '/confirm' })
@@ -34,6 +34,19 @@ const confirm = new Elysia({ prefix: '/confirm' })
               
               if (success) {
                 console.log(`Payment stored for confirmed transaction: ${payment.transaction_hash}`);
+                
+                // Create or update subscription record
+                if (payment.subscription_duration_days) {
+                  const subscriptionEndDate = new Date(payment.payment_date);
+                  subscriptionEndDate.setDate(subscriptionEndDate.getDate() + payment.subscription_duration_days);
+                  
+                  const subscriptionSuccess = await upsertSubscription(payment.wallet_address, subscriptionEndDate);
+                  if (subscriptionSuccess) {
+                    console.log(`Subscription updated for wallet: ${payment.wallet_address}`);
+                  } else {
+                    console.error(`Failed to update subscription for wallet: ${payment.wallet_address}`);
+                  }
+                }
               } else {
                 console.error(`Failed to store payment for transaction: ${payment.transaction_hash}`);
               }
@@ -67,5 +80,103 @@ const confirm = new Elysia({ prefix: '/confirm' })
       }),
     }
   )
+  .post(
+    '/confirm',
+    async ({ body: { transaction } }) => {
+      try {
+        // Parse the subscription transaction to extract details
+        const subscriptionDetails = await parseSubscriptionTransaction(transaction);
+        
+        if (!subscriptionDetails) {
+          return Response.json(
+            { message: 'Failed to parse subscription transaction or invalid transaction' },
+            { status: 400 }
+          );
+        }
+
+        // Validate subscription details
+        if (!subscriptionDetails.walletAddress || subscriptionDetails.amountUsdc < 2) {
+          return Response.json(
+            { message: 'Invalid subscription details: missing wallet address or insufficient amount' },
+            { status: 400 }
+          );
+        }
+
+        console.log('Parsed subscription details:', subscriptionDetails);
+
+        // Send the transaction for confirmation
+        const signature = await confirmTransactions([transaction]);
+        
+        if (signature[0]) {
+          // Store the payment in the database
+          const paymentData = {
+            transaction_hash: signature[0],
+            wallet_address: subscriptionDetails.walletAddress,
+            amount_usdc: subscriptionDetails.amountUsdc,
+            payment_date: new Date(),
+            subscription_duration_days: subscriptionDetails.subscriptionDurationDays,
+            status: 'pending' as const // Will be updated to 'confirmed' after verification
+          };
+
+          const paymentSuccess = await addPayment(paymentData);
+          
+          if (!paymentSuccess) {
+            console.error('Failed to store payment in database');
+            return Response.json(
+              { message: 'Failed to store payment in database' },
+              { status: 500 }
+            );
+          }
+
+          // Create or update subscription record
+          const subscriptionEndDate = new Date();
+          subscriptionEndDate.setDate(subscriptionEndDate.getDate() + subscriptionDetails.subscriptionDurationDays);
+          
+          const subscriptionSuccess = await upsertSubscription(
+            subscriptionDetails.walletAddress, 
+            subscriptionEndDate
+          );
+          
+          if (!subscriptionSuccess) {
+            console.error('Failed to update subscription in database');
+            // Don't fail the entire request, just log the error
+          }
+
+          console.log(`Subscription processed successfully for wallet: ${subscriptionDetails.walletAddress}`);
+          console.log(`Amount: ${subscriptionDetails.amountUsdc} USDC`);
+          console.log(`Duration: ${subscriptionDetails.subscriptionDurationDays} days`);
+          console.log(`End date: ${subscriptionEndDate.toISOString()}`);
+
+          return { 
+            signature: signature[0],
+            subscriptionDetails: {
+              signature: signature[0],
+              wallet_address: subscriptionDetails.walletAddress,
+              amount_usdc: subscriptionDetails.amountUsdc,
+              subscription_duration_days: subscriptionDetails.subscriptionDurationDays,
+              subscription_end_date: subscriptionEndDate.toISOString(),
+              status: 'confirmed'
+            }
+          };
+        } else {
+          return Response.json(
+            { message: 'Transaction confirmation failed' },
+            { status: 400 }
+          );
+        }
+      } catch (error) {
+        console.error('Error confirming transaction:', error);
+        return Response.json(
+          { message: 'Internal server error' },
+          { status: 500 }
+        );
+      }
+    },
+    {
+      body: t.Object({
+        transaction: t.String(),
+      }),
+    }
+  );
 
 export default confirm;
