@@ -16,6 +16,7 @@ interface PricingCardProps {
   isActive?: boolean
   isCurrent?: boolean
   isYearly: boolean
+  isStarter?: boolean
   usdcToken: TokenInfo
   onSuccess: (signature: string) => void
   onError: (error: string) => void
@@ -31,6 +32,7 @@ export const PricingCard: React.FC<PricingCardProps> = ({
   isActive = false,
   isCurrent = false,
   isYearly,
+  isStarter = false,
   usdcToken,
   onSuccess,
   onError
@@ -40,7 +42,7 @@ export const PricingCard: React.FC<PricingCardProps> = ({
 
   return (
     <Card className={cn(
-      "bg-gray-800 border-2 relative",
+      "bg-gray-800 border-2 relative flex flex-col h-full",
       isCurrent ? "border-green-500" : "border-gray-700"
     )}>
       <div className="absolute top-4 right-4">
@@ -57,7 +59,7 @@ export const PricingCard: React.FC<PricingCardProps> = ({
           </div>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="flex flex-col flex-1">
         <ul className="space-y-2 mb-6">
           {features.map((feature, index) => (
             <li key={index} className="flex items-center gap-2">
@@ -67,25 +69,31 @@ export const PricingCard: React.FC<PricingCardProps> = ({
           ))}
         </ul>
         
-        {isCurrent ? (
-          <div className="text-center py-2 text-green-500 font-medium">
-            Current Plan
-          </div>
-        ) : isConnected && selectedAccount ? (
-          <PaymentButton
-            account={selectedAccount}
-            params={{
-              selectedToken: usdcToken,
-              amount: currentPrice,
-              onSuccess,
-              onError
-            }}
-          />
-        ) : (
-          <Button disabled variant="outline" className="w-full">
-            Connect Wallet
-          </Button>
-        )}
+        <div className="mt-auto pt-4">
+          {isCurrent ? (
+            <div className="text-center py-2 text-green-500 font-medium">
+              Current Plan
+            </div>
+          ) : isStarter ? (
+            <div className="text-center py-2 text-gray-400 font-medium">
+              Free Plan
+            </div>
+          ) : isConnected && selectedAccount ? (
+            <PaymentButton
+              account={selectedAccount}
+              params={{
+                selectedToken: usdcToken,
+                amount: currentPrice,
+                onSuccess,
+                onError
+              }}
+            />
+          ) : (
+            <Button disabled variant="outline" className="w-full">
+              Connect Wallet
+            </Button>
+          )}
+        </div>
       </CardContent>
     </Card>
   )

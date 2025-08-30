@@ -77,7 +77,7 @@ export const PricingPage: React.FC = () => {
       features: ["Basic features", "Standard support"],
       isActive: !userPlan || !userPlan.isActive,
       isCurrent: !userPlan || !userPlan.isActive,
-      showPaymentButton: false
+      isStarter: true
     },
     {
       title: "Pro I",
@@ -88,7 +88,7 @@ export const PricingPage: React.FC = () => {
       features: ["Advanced features", "Priority support", "Premium tools"],
       isActive: getPlanStatus("Pro I", "2", yearly).isActive,
       isCurrent: getPlanStatus("Pro I", "2", yearly).isCurrent,
-      showPaymentButton: true
+      isStarter: false
     },
     {
       title: "Pro II",
@@ -99,7 +99,7 @@ export const PricingPage: React.FC = () => {
       features: ["All Pro I features", "Enterprise tools", "24/7 support"],
       isActive: getPlanStatus("Pro II", "10", yearly).isActive,
       isCurrent: getPlanStatus("Pro II", "10", yearly).isCurrent,
-      showPaymentButton: true
+      isStarter: false
     }
   ]
 
@@ -143,7 +143,7 @@ export const PricingPage: React.FC = () => {
         </div>
 
         {/* Main Title and Toggle */}
-        <div className="flex items-center justify-center gap-6 mb-8">
+        <div className="flex items-center justify-between mb-8">
           <h2 className="text-3xl font-bold">
             Subscription demo
           </h2>
@@ -193,6 +193,7 @@ export const PricingPage: React.FC = () => {
               isActive={plan.isActive}
               isCurrent={plan.isCurrent}
               isYearly={yearly}
+              isStarter={plan.isStarter}
               usdcToken={usdcToken}
               onSuccess={handleSubscriptionSuccess}
               onError={handleSubscriptionError}
