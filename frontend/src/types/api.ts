@@ -21,7 +21,13 @@ export interface SubscriptionData {
 
 // API Response Types
 export interface SubscriptionTransactionResponse {
-  transaction: string;
+  transaction: {
+    message: any; // Transaction message from backend
+    lifetimeConstraint: {
+      blockhash: string;
+      lastValidBlockHeight: number;
+    };
+  };
   amount: number;
   metadata: {
     tokenMint: string;

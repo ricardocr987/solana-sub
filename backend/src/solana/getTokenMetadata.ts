@@ -54,7 +54,7 @@ async function getMetadataFromMetaplexDAS(mint: string): Promise<TokenMetadata |
     console.log(`Fetching metadata from Metaplex DAS for mint: ${mint}`);
     
     // Use QuickNode's getAsset RPC method with showFungible flag for token info
-    const response = await fetch(config.QUICKNODE_RPC_URL!, {
+    const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${process.env.RPC_KEY}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -261,7 +261,7 @@ export async function getAssetDetails(mint: string): Promise<any | null> {
       return null;
     }
 
-    const response = await fetch(config.QUICKNODE_RPC_URL!, {
+    const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${process.env.RPC_KEY}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

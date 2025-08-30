@@ -1,11 +1,12 @@
-import { type TokenInfo, type SubscriptionTransactionResponse, type ConfirmSubscriptionResponse } from "../../types/api";
+import { type TokenInfo, type SubscriptionTransactionResponse, type ConfirmSubscriptionResponse } from "../types/api";
 import { useSignTransaction } from "@solana/react";
 import { type UiWalletAccount } from "@wallet-standard/react";
 import { useCallback } from "react";
+import { Button } from "./ui/button";
+import { useTransactionToast } from "../context/TransactionToastContext";
+import { getBase64Encoder } from "@solana/kit";
+import { api } from "../lib/api";
 import bs58 from 'bs58';
-import { Button } from "../ui/button";
-import { useTransactionToast } from "../../context/TransactionToastContext";
-import { useSubscription } from "../../hooks/useSubscription";
 
 interface PaymentProps {
     selectedToken: TokenInfo;
@@ -18,8 +19,7 @@ const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 export function PaymentButton({ account, params }: { account: UiWalletAccount, params: PaymentProps }) {
     const signTransaction = useSignTransaction(account, 'solana:mainnet');
-    const { executeTransfer, updateTransactionStatus } = useTransactionToast();
-    const { getSubscriptionTransaction, confirmSubscription } = useSubscription();
+    const { startTransaction, updateTransactionStatus } = useTransactionToast();
 
     const handleTransaction = useCallback(async () => {
         const { selectedToken, amount, onSuccess, onError } = params;
@@ -31,47 +31,61 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                 throw new Error("Only USDC payments are supported for subscriptions");
             }
 
-            // Start transaction toast and get transaction ID
-            const transactionId = await executeTransfer({
+            // Start transaction and get ID
+            const transactionId = startTransaction({
                 amount,
-                tokenMint: selectedToken.mint,
-                to: 'subscription-service',
-                tokenSymbol: selectedToken.symbol,
-                tokenLogoURI: selectedToken.logoURI
+                tokenSymbol: selectedToken.symbol
             });
 
             try {
                 // Step 1: Get transaction from backend
                 updateTransactionStatus(transactionId, { status: 'building' });
-                const transactionResponse = await getSubscriptionTransaction({
+                console.log('Getting subscription transaction from backend...');
+                
+                const { data, error } = await api.subscription.transaction.post({
                     account: account.address,
                     amount: amount
                 });
 
-                if (!transactionResponse) {
-                    throw new Error("Failed to generate subscription transaction");
+                if (error) {
+                    const errorMessage = error.value?.message || `HTTP ${error.status} error`;
+                    throw new Error(errorMessage);
                 }
 
-                const { transaction: base64Transaction, metadata } = transactionResponse;
-                console.log("Generated transaction:", base64Transaction);
-                console.log("Transaction metadata:", metadata);
+                if (!data) {
+                    throw new Error('No data received from server');
+                }
+
+                // Type guard to ensure we have the expected data structure
+                if (!('transaction' in data)) {
+                    throw new Error('Invalid response format from server');
+                }
+
+                console.log("Received transaction data from backend:", data);
 
                 // Step 2: Sign the transaction
-                updateTransactionStatus(transactionId, { status: 'building' });
-                const transactionBytes = base64ToUint8Array(base64Transaction);
+                updateTransactionStatus(transactionId, { status: 'signing' });
+                console.log('Signing transaction...');
                 
+                const base64Encoder = getBase64Encoder();
+                console.log('data.transaction:', data.transaction);
+                const transactionBytes = base64Encoder.encode(data.transaction);
+                console.log('transactionBytes:', transactionBytes);
                 const { signedTransaction } = await signTransaction({
-                    transaction: transactionBytes,
+                    transaction: transactionBytes as unknown as Uint8Array,
                 });
-
-                // Convert to base64 for sending
+                // Convert signed transaction to base64 for sending to backend
                 const serializedTransaction = bs58.encode(Buffer.from(signedTransaction));
+                console.log('Serialized transaction (base64) length:', serializedTransaction.length);
+                console.log('Serialized transaction preview:',  serializedTransaction);
 
                 // Step 3: Send signed transaction for confirmation
-                updateTransactionStatus(transactionId, { status: 'building' });
-                const confirmResponse = await confirmSubscription({
+                updateTransactionStatus(transactionId, { status: 'confirming' });
+                console.log('Confirming transaction on backend...');
+                
+                const confirmResponse = await api.confirm.transactions.post({
                     transactions: [serializedTransaction],
-                    payments: [{
+                    payments: [{    
                         transaction_hash: serializedTransaction,
                         wallet_address: account.address,
                         amount_usdc: parseFloat(amount),
@@ -80,11 +94,15 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                     }]
                 });
 
-                if (!confirmResponse) {
-                    throw new Error("Failed to confirm transaction");
+                if (confirmResponse.error) {
+                    throw new Error(confirmResponse.error.value?.message || 'Failed to confirm transaction');
                 }
 
-                const { signatures, transactions } = confirmResponse;
+                if (!confirmResponse.data) {
+                    throw new Error('No confirmation data received');
+                }
+
+                const { signatures, transactions } = confirmResponse.data;
                 
                 if (!signatures || signatures.length === 0 || !signatures[0]) {
                     throw new Error("No signature returned from confirmation");
@@ -125,7 +143,7 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
             const errorMessage = error instanceof Error ? error.message : "Something went wrong";
             onError(errorMessage);
         }
-    }, [account, params, signTransaction, executeTransfer, updateTransactionStatus, getSubscriptionTransaction, confirmSubscription]);
+    }, [account, params, signTransaction, startTransaction, updateTransactionStatus]);
 
     return (
         <Button
@@ -135,13 +153,4 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
             Confirm Payment
         </Button>
     );
-}
-
-function base64ToUint8Array(base64: string): Uint8Array {
-    const binaryString = atob(base64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes;
 }

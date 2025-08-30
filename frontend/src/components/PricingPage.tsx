@@ -25,8 +25,21 @@ export const PricingPage: React.FC = () => {
     console.error('Subscription error:', error)
   }
 
-  // Determine if starter plan should be shown as active
-  const isStarterActive = !userPlan || userPlan.name === "Free" || !userPlan.isActive
+  // Determine plan status based on UserPlan
+  const getPlanStatus = (planTitle: string, planPrice: string, isYearly: boolean) => {
+    if (!userPlan || !userPlan.isActive) {
+      return { isActive: false, isCurrent: false };
+    }
+
+    // Check if this plan matches the user's current plan
+    if (userPlan.name.includes(planTitle) || 
+        (userPlan.name.includes("Pro I") && planTitle === "Pro I") ||
+        (userPlan.name.includes("Pro II") && planTitle === "Pro II")) {
+      return { isActive: true, isCurrent: true };
+    }
+
+    return { isActive: false, isCurrent: false };
+  };
 
   // Format subscription end date for display
   const formatSubscriptionEndDate = (dateString: string | null) => {
@@ -62,7 +75,8 @@ export const PricingPage: React.FC = () => {
       price: "0",
       yearlyPrice: "0",
       features: ["Basic features", "Standard support"],
-      isActive: isStarterActive,
+      isActive: !userPlan || !userPlan.isActive,
+      isCurrent: !userPlan || !userPlan.isActive,
       showPaymentButton: false
     },
     {
@@ -72,7 +86,8 @@ export const PricingPage: React.FC = () => {
       price: "2",
       yearlyPrice: "20",
       features: ["Advanced features", "Priority support", "Premium tools"],
-      isActive: userPlan?.name.includes("Active") || false,
+      isActive: getPlanStatus("Pro I", "2", yearly).isActive,
+      isCurrent: getPlanStatus("Pro I", "2", yearly).isCurrent,
       showPaymentButton: true
     },
     {
@@ -82,7 +97,8 @@ export const PricingPage: React.FC = () => {
       price: "10",
       yearlyPrice: "100",
       features: ["All Pro I features", "Enterprise tools", "24/7 support"],
-      isActive: false,
+      isActive: getPlanStatus("Pro II", "10", yearly).isActive,
+      isCurrent: getPlanStatus("Pro II", "10", yearly).isCurrent,
       showPaymentButton: true
     }
   ]
@@ -175,6 +191,7 @@ export const PricingPage: React.FC = () => {
               yearlyPrice={plan.yearlyPrice}
               features={plan.features}
               isActive={plan.isActive}
+              isCurrent={plan.isCurrent}
               isYearly={yearly}
               usdcToken={usdcToken}
               onSuccess={handleSubscriptionSuccess}
@@ -262,16 +279,29 @@ export const PricingPage: React.FC = () => {
           </Card>
         </div>
 
+        {/* Debug Info */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="mt-8 p-4 bg-gray-800 rounded-lg border border-gray-700">
+            <h3 className="text-lg font-semibold text-white mb-2">Debug Info</h3>
+            <pre className="text-xs text-gray-300 overflow-auto">
+              {JSON.stringify({
+                userPlan,
+                isConnected,
+                selectedAccount: selectedAccount?.address,
+                pricingPlans: pricingPlans.map(p => ({
+                  title: p.title,
+                  isActive: p.isActive,
+                  isCurrent: p.isCurrent
+                }))
+              }, null, 2)}
+            </pre>
+          </div>
+        )}
+
         {/* Error Display */}
         {userPlanError && (
           <div className="text-red-500 text-sm text-center bg-red-900/20 p-4 rounded-lg border border-red-700">
             {userPlanError}
-          </div>
-        )}
-
-        {!isConnected && (
-          <div className="text-center py-8">
-            <p className="text-gray-400">Connect your wallet to subscribe to premium plans</p>
           </div>
         )}
       </div>

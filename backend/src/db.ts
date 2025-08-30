@@ -1,7 +1,7 @@
 import { Database } from "bun:sqlite";
 
-// Database instance - using in-memory for development, can be changed to file-based
-const db = new Database(":memory:", { 
+// Database instance - using file-based for development, can be changed to in-memory for testing
+const db = new Database("subscriptions.db", { 
   create: true,
   strict: true 
 });
@@ -47,7 +47,6 @@ function initializeDatabase() {
 // Initialize database when module is loaded
 initializeDatabase();
 
-/*
 // Add some sample data for demonstration
 function addSampleData() {
   try {
@@ -92,7 +91,50 @@ function addSampleData() {
 }
 
 // Add sample data after initialization
-addSampleData();*/
+addSampleData();
+
+// Function to create sample data for a specific wallet (useful for testing)
+export async function createSampleDataForWallet(walletAddress: string): Promise<boolean> {
+  try {
+    const endDate = new Date();
+    endDate.setDate(endDate.getDate() + 30); // 30 days from now
+    
+    // Create subscription
+    await upsertSubscription(walletAddress, endDate);
+    
+    // Create sample payment
+    const paymentDate = new Date();
+    paymentDate.setDate(paymentDate.getDate() - 5); // 5 days ago
+    
+    const stmt = db.prepare(`
+      INSERT OR IGNORE INTO payments (
+        transaction_hash, 
+        wallet_address, 
+        amount_usdc, 
+        payment_date, 
+        subscription_duration_days,
+        subscription_end_date,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    const result = stmt.run(
+      `sample-${walletAddress.slice(0, 8)}`,
+      walletAddress,
+      2.00, // Pro I monthly
+      paymentDate.toISOString(),
+      30,
+      endDate.toISOString(),
+      'confirmed'
+    );
+    
+    console.log(`Sample data created for wallet: ${walletAddress}`);
+    return result.changes > 0;
+  } catch (error) {
+    console.error(`Error creating sample data for wallet: ${error}`);
+    return false;
+  }
+}
 // Types for our database entities
 export interface Payment {
   id?: number;

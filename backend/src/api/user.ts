@@ -1,5 +1,5 @@
 import { Elysia } from "elysia";
-import { getSubscriptionByWallet, getPaymentsByWallet } from "../db";
+import { getSubscriptionByWallet, getPaymentsByWallet, createSampleDataForWallet } from "../db";
 
 const user = new Elysia({ prefix: "/user" })
   .get("/plan/:wallet", async ({ params: { wallet } }) => {
@@ -76,6 +76,63 @@ const user = new Elysia({ prefix: "/user" })
       return {
         success: false,
         error: "Failed to fetch user plan"
+      };
+    }
+  })
+  .post("/create-sample-data", async ({ body }) => {
+    try {
+      const { walletAddress } = body as { walletAddress: string };
+      
+      if (!walletAddress) {
+        return {
+          success: false,
+          error: "Wallet address is required"
+        };
+      }
+      
+      const result = await createSampleDataForWallet(walletAddress);
+      
+      if (result) {
+        return {
+          success: true,
+          message: "Sample data created successfully"
+        };
+      } else {
+        return {
+          success: false,
+          error: "Failed to create sample data"
+        };
+      }
+    } catch (error) {
+      console.error("Error creating sample data:", error);
+      return {
+        success: false,
+        error: "Failed to create sample data"
+      };
+    }
+  })
+  .get("/debug/:wallet", async ({ params: { wallet } }) => {
+    try {
+      console.log(`Debug request for wallet: ${wallet}`);
+      
+      // Get raw data from database
+      const subscription = await getSubscriptionByWallet(wallet);
+      const payments = await getPaymentsByWallet(wallet);
+      
+      return {
+        success: true,
+        data: {
+          wallet,
+          subscription,
+          payments,
+          timestamp: new Date().toISOString()
+        }
+      };
+    } catch (error) {
+      console.error("Error in debug endpoint:", error);
+      return {
+        success: false,
+        error: "Debug failed"
       };
     }
   });

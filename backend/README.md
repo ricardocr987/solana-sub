@@ -73,6 +73,6 @@ The system is configured to always use QuickNode RPC for optimal performance and
 
 ## Dependencies
 
-- `@solana/web3.js`: Solana Web3 library
+- `@solana/kit`: Solana Web3 library
 - `elysia`: Fast web framework
 - `bun`: JavaScript runtime

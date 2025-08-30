@@ -1,7 +1,7 @@
 import React from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
 import { Button } from './ui/button'
-import { PaymentButton } from './solana/PaymentButton'
+import { PaymentButton } from './PaymentButton'
 import { useWallet } from '../context/WalletContext'
 import type { TokenInfo } from '../types/api'
 import { cn } from '../lib/utils'
@@ -14,6 +14,7 @@ interface PricingCardProps {
   yearlyPrice: string
   features: string[]
   isActive?: boolean
+  isCurrent?: boolean
   isYearly: boolean
   usdcToken: TokenInfo
   onSuccess: (signature: string) => void
@@ -28,6 +29,7 @@ export const PricingCard: React.FC<PricingCardProps> = ({
   yearlyPrice,
   features,
   isActive = false,
+  isCurrent = false,
   isYearly,
   usdcToken,
   onSuccess,
@@ -39,7 +41,7 @@ export const PricingCard: React.FC<PricingCardProps> = ({
   return (
     <Card className={cn(
       "bg-gray-800 border-2 relative",
-      isActive ? "border-green-500" : "border-gray-700"
+      isCurrent ? "border-green-500" : "border-gray-700"
     )}>
       <div className="absolute top-4 right-4">
         <span className="text-2xl font-bold text-green-500">${currentPrice}</span>
@@ -65,7 +67,7 @@ export const PricingCard: React.FC<PricingCardProps> = ({
           ))}
         </ul>
         
-        {isActive ? (
+        {isCurrent ? (
           <div className="text-center py-2 text-green-500 font-medium">
             Current Plan
           </div>

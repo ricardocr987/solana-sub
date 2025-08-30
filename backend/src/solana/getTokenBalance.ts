@@ -2,6 +2,7 @@
 import { address } from '@solana/kit';
 import { findAssociatedTokenPda, TOKEN_PROGRAM_ADDRESS } from '@solana-program/token';
 import { config } from '../config';
+import { rpc } from './rpc';
 
 // SOL mint address (native SOL)
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -204,7 +205,7 @@ async function getSolBalance(userKey: string): Promise<string | null> {
     const userPublicKey = address(userKey);
     
     // Use Solana Kit RPC to get SOL balance
-    const solBalance = await config.QUICKNODE_RPC.getBalance(userPublicKey as any).send();
+    const solBalance = await rpc.getBalance(userPublicKey as any).send();
     
     if (solBalance === null) {
       console.warn('Failed to get SOL balance for user:', userKey);
@@ -238,7 +239,7 @@ export async function getSplTokenBalance(userKey: string, tokenMint: string): Pr
     const mintPublicKey = address(tokenMint);
 
     // Get mint info for decimals
-    const mintInfo = await config.QUICKNODE_RPC.getAccountInfo(mintPublicKey as any, {
+    const mintInfo = await rpc.getAccountInfo(mintPublicKey as any, {
       encoding: 'jsonParsed'
     }).send();
 
@@ -262,7 +263,7 @@ export async function getSplTokenBalance(userKey: string, tokenMint: string): Pr
     console.log(`Derived PDA for associated token account: ${associatedTokenAccount}`);
 
     // Get the associated token account info
-    const tokenAccountInfo = await config.QUICKNODE_RPC.getAccountInfo(associatedTokenAccount, {
+    const tokenAccountInfo = await rpc.getAccountInfo(associatedTokenAccount, {
       encoding: 'jsonParsed'
     }).send();
 

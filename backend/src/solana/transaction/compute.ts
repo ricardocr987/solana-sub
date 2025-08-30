@@ -17,7 +17,8 @@ import {
   getSetComputeUnitLimitInstruction,
   getSetComputeUnitPriceInstruction,
 } from '@solana-program/compute-budget';
-import { QUICKNODE_RPC, config } from '../config';
+import { config } from '../../config';
+import { rpc } from '../rpc';
 
 export const PRIORITY_LEVELS = {
   MIN: 'Min',
@@ -61,7 +62,7 @@ async function getComputeUnits(
   wireTransaction: Base64EncodedWireTransaction
 ): Promise<number> {
   console.log('wireTransaction', wireTransaction.length)
-  const simulation = await QUICKNODE_RPC
+  const simulation = await rpc
     .simulateTransaction(wireTransaction, {
       sigVerify: false,
       encoding: 'base64',

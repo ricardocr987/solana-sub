@@ -38,13 +38,15 @@ export const useUserPlan = (walletAddress?: string) => {
     setError(null)
 
     try {
-      const response = await fetch(`/api/user/plan/${walletAddress}`)
+      console.log('Fetching user plan for wallet:', walletAddress)
+      const response = await fetch(`http://localhost:3000/user/plan/${walletAddress}`)
 
       if (!response.ok) {
-        throw new Error('Failed to fetch user plan')
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
 
       const data = await response.json()
+      console.log('User plan response:', data)
 
       if (data && data.success && data.data) {
         const currentPlan = data.data.currentPlan
@@ -70,15 +72,39 @@ export const useUserPlan = (walletAddress?: string) => {
           setUserPlan(formattedPlan)
           setPaymentHistory(formattedHistory)
         } else {
-          throw new Error('Invalid data structure from server')
+          // Handle case where no subscription data exists yet
+          console.log('No subscription data found, setting default plan')
+          setUserPlan({
+            name: 'Free',
+            isActive: true,
+            subscriptionEndDate: null,
+            walletAddress: walletAddress
+          })
+          setPaymentHistory([])
         }
       } else {
-        throw new Error('Invalid response from server')
+        // Handle case where response doesn't have expected structure
+        console.log('Response missing expected data structure, setting default plan')
+        setUserPlan({
+          name: 'Free',
+          isActive: true,
+          subscriptionEndDate: null,
+          walletAddress: walletAddress
+        })
+        setPaymentHistory([])
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
+      console.error('Error fetching user plan:', err)
       setError(errorMessage)
-      setUserPlan(null)
+      
+      // Set default plan on error
+      setUserPlan({
+        name: 'Free',
+        isActive: true,
+        subscriptionEndDate: null,
+        walletAddress: walletAddress
+      })
       setPaymentHistory([])
     } finally {
       setIsLoading(false)
