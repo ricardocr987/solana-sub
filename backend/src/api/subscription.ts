@@ -39,9 +39,28 @@ const subscription = new Elysia({ prefix: '/subscription' })
                 {} // Empty lookup table accounts for now
             );
 
+            // Return enhanced response with transaction metadata
             return { 
                 transaction,
-                amount: parseFloat(amount)
+                amount: parseFloat(amount),
+                metadata: {
+                    tokenMint: USDC_MINT,
+                    tokenSymbol: 'USDC',
+                    tokenName: 'USD Coin',
+                    tokenDecimals: 6,
+                    tokenLogoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+                    receiverAddress: config.RECEIVER,
+                    subscriptionPlans: {
+                        monthly: {
+                            pro1: { amount: 2, duration: 30 },
+                            pro2: { amount: 10, duration: 30 }
+                        },
+                        yearly: {
+                            pro1: { amount: 20, duration: 365 },
+                            pro2: { amount: 100, duration: 365 }
+                        }
+                    }
+                }
             };
         } catch (error) {
             console.error('Error building subscription transaction:', error);

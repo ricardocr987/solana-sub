@@ -1,6 +1,7 @@
 'use client'
 
 import React, { createContext, useContext, useState, useCallback, useRef } from 'react';
+import { useToast } from '../hooks/useToast';
 
 export interface TransactionStatus {
   id: string;
@@ -18,6 +19,8 @@ export interface TransactionRequest {
     amount: string;
     tokenMint: string;
     to: string;
+    tokenSymbol?: string;
+    tokenLogoURI?: string;
   };
   createdAt: Date;
 }
@@ -28,6 +31,8 @@ interface TransactionToastContextType {
     amount: string;
     tokenMint: string;
     to: string;
+    tokenSymbol?: string;
+    tokenLogoURI?: string;
     onSuccess?: (signature: string) => void;
     onError?: (error: string) => void;
   }) => Promise<string>; // Returns transaction ID
@@ -53,6 +58,7 @@ const TransactionToastContext = createContext<TransactionToastContextType | unde
 export const TransactionToastProvider = React.memo(({ children }: TransactionToastProviderProps) => {
   const [activeTransactions, setActiveTransactions] = useState<TransactionRequest[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const { toast } = useToast();
   
   const transactionIdCounter = useRef(0);
 
@@ -73,22 +79,53 @@ export const TransactionToastProvider = React.memo(({ children }: TransactionToa
     isServerError: false,
   }), []);
 
-  // Update transaction status
+  // Update transaction status and show appropriate toast
   const updateTransactionStatus = useCallback((transactionId: string, updates: Partial<TransactionStatus>) => {
     setActiveTransactions(prev => {
-      return prev.map(transaction => 
+      const updated = prev.map(transaction => 
         transaction.id === transactionId 
           ? { ...transaction, status: { ...transaction.status, ...updates } }
           : transaction
       );
+      
+      // Find the updated transaction to show toast
+      const updatedTransaction = updated.find(t => t.id === transactionId);
+      if (updatedTransaction) {
+        const { status, error, signature } = updatedTransaction.status;
+        
+        if (status === 'success' && signature) {
+          toast({
+            title: 'Transaction Successful',
+            description: `${updatedTransaction.data.amount} ${updatedTransaction.data.tokenSymbol || 'USDC'} sent successfully`,
+            duration: 5000,
+          });
+        } else if (status === 'error' && error) {
+          toast({
+            title: 'Transaction Failed',
+            description: error,
+            variant: 'destructive',
+            duration: 5000,
+          });
+        } else if (status === 'building') {
+          toast({
+            title: 'Processing Transaction',
+            description: 'Your transaction is being processed on the Solana network',
+            duration: 3000,
+          });
+        }
+      }
+      
+      return updated;
     });
-  }, []);
+  }, [toast]);
 
   // Execute transfer transaction
   const executeTransfer = useCallback(async (params: {
     amount: string;
     tokenMint: string;
     to: string;
+    tokenSymbol?: string;
+    tokenLogoURI?: string;
     onSuccess?: (signature: string) => void;
     onError?: (error: string) => void;
   }) => {
@@ -104,6 +141,8 @@ export const TransactionToastProvider = React.memo(({ children }: TransactionToa
         amount: params.amount,
         tokenMint: params.tokenMint,
         to: params.to,
+        tokenSymbol: params.tokenSymbol,
+        tokenLogoURI: params.tokenLogoURI,
       },
       createdAt: new Date()
     };
@@ -111,12 +150,19 @@ export const TransactionToastProvider = React.memo(({ children }: TransactionToa
     setActiveTransactions(prev => [...prev, newTransaction]);
     setIsLoading(true);
 
+    // Show initial toast
+    toast({
+      title: 'Transaction Started',
+      description: `Preparing to send ${params.amount} ${params.tokenSymbol || 'USDC'}`,
+      duration: 3000,
+    });
+
     // Update status to building
     updateTransactionStatus(transactionId, { status: 'building' });
 
     // Return the transaction ID so the caller can update the status
     return transactionId;
-  }, [generateTransactionId, createInitialStatus, updateTransactionStatus]);
+  }, [generateTransactionId, createInitialStatus, updateTransactionStatus, toast]);
 
   // Dismiss a transaction
   const dismissTransaction = useCallback((transactionId: string) => {
@@ -140,54 +186,6 @@ export const TransactionToastProvider = React.memo(({ children }: TransactionToa
   return (
     <TransactionToastContext.Provider value={contextValue}>
       {children}
-      
-      {/* Transaction Toast - only render when there are transactions */}
-      {activeTransactions.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 space-y-2">
-          {activeTransactions.map((transaction) => (
-            <div
-              key={transaction.id}
-              className={`p-4 rounded-lg shadow-lg w-80 ${
-                transaction.status.status === 'success' 
-                  ? 'bg-green-600 text-white' 
-                  : transaction.status.status === 'error'
-                  ? 'bg-red-600 text-white'
-                  : 'bg-blue-600 text-white'
-              }`}
-            >
-              <div className="flex justify-between items-start">
-                <div>
-                  <div className="font-medium">
-                    {transaction.status.status === 'success' && 'Transaction Successful'}
-                    {transaction.status.status === 'error' && 'Transaction Failed'}
-                    {transaction.status.status === 'building' && 'Processing Transaction'}
-                    {transaction.status.status === 'pending' && 'Transaction Pending'}
-                  </div>
-                  <div className="text-sm opacity-90 mt-1">
-                    {transaction.data.amount} {transaction.data.tokenMint === 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v' ? 'USDC' : 'tokens'}
-                  </div>
-                  {transaction.status.signature && (
-                    <div className="text-xs opacity-75 mt-1 font-mono">
-                      {transaction.status.signature.slice(0, 8)}...{transaction.status.signature.slice(-8)}
-                    </div>
-                  )}
-                  {transaction.status.error && (
-                    <div className="text-sm opacity-90 mt-1">
-                      {transaction.status.error}
-                    </div>
-                  )}
-                </div>
-                <button
-                  onClick={() => dismissTransaction(transaction.id)}
-                  className="text-white opacity-70 hover:opacity-100"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
     </TransactionToastContext.Provider>
   );
 });

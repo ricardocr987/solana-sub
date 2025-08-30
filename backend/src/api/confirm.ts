@@ -56,7 +56,21 @@ const confirm = new Elysia({ prefix: '/confirm' })
           }
         }
 
-        return { signatures: verifiedSignatures };
+        // Return enhanced response with transaction details
+        return { 
+          signatures: verifiedSignatures,
+          transactions: verifiedSignatures.map((signature, index) => ({
+            signature,
+            status: signature ? 'confirmed' : 'failed',
+            payment: payments?.[index] || null,
+            subscriptionDetails: payments?.[index] ? {
+              walletAddress: payments[index].wallet_address,
+              amountUsdc: payments[index].amount_usdc,
+              durationDays: payments[index].subscription_duration_days || 0,
+              plan: getPlanFromAmount(payments[index].amount_usdc, payments[index].subscription_duration_days || 0)
+            } : null
+          }))
+        };
       } catch (error: any) {
         console.error(
           'Error in transactions endpoint:',
@@ -64,7 +78,10 @@ const confirm = new Elysia({ prefix: '/confirm' })
           'transactions',
           body.transactions
         );
-        return { signatures: body.transactions.map(() => '') };
+        return { 
+          signatures: body.transactions.map(() => ''),
+          error: error.message || 'Failed to process transactions'
+        };
       }
     },
     {
@@ -155,7 +172,8 @@ const confirm = new Elysia({ prefix: '/confirm' })
               amount_usdc: subscriptionDetails.amountUsdc,
               subscription_duration_days: subscriptionDetails.subscriptionDurationDays,
               subscription_end_date: subscriptionEndDate.toISOString(),
-              status: 'confirmed'
+              status: 'confirmed',
+              plan: getPlanFromAmount(subscriptionDetails.amountUsdc, subscriptionDetails.subscriptionDurationDays)
             }
           };
         } else {
@@ -178,5 +196,17 @@ const confirm = new Elysia({ prefix: '/confirm' })
       }),
     }
   );
+
+// Helper function to determine subscription plan from amount and duration
+function getPlanFromAmount(amount: number, durationDays: number): string {
+  if (durationDays === 30) {
+    if (amount === 2) return 'Monthly Pro I';
+    if (amount === 10) return 'Monthly Pro II';
+  } else if (durationDays === 365) {
+    if (amount === 20) return 'Yearly Pro I';
+    if (amount === 100) return 'Yearly Pro II';
+  }
+  return 'Custom Plan';
+}
 
 export default confirm;

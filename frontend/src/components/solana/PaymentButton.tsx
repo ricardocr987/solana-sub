@@ -1,4 +1,4 @@
-import { type TokenInfo } from "../../types/api";
+import { type TokenInfo, type SubscriptionTransactionResponse, type ConfirmSubscriptionResponse } from "../../types/api";
 import { useSignTransaction } from "@solana/react";
 import { type UiWalletAccount } from "@wallet-standard/react";
 import { useCallback } from "react";
@@ -6,7 +6,6 @@ import bs58 from 'bs58';
 import { Button } from "../ui/button";
 import { useTransactionToast } from "../../context/TransactionToastContext";
 import { useSubscription } from "../../hooks/useSubscription";
-import { getBase64Encoder } from "@solana/kit";
 
 interface PaymentProps {
     selectedToken: TokenInfo;
@@ -36,7 +35,9 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
             const transactionId = await executeTransfer({
                 amount,
                 tokenMint: selectedToken.mint,
-                to: 'subscription-service'
+                to: 'subscription-service',
+                tokenSymbol: selectedToken.symbol,
+                tokenLogoURI: selectedToken.logoURI
             });
 
             try {
@@ -47,12 +48,13 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                     amount: amount
                 });
 
-                if (!transactionResponse || !transactionResponse.transaction) {
+                if (!transactionResponse) {
                     throw new Error("Failed to generate subscription transaction");
                 }
 
-                const { transaction: base64Transaction } = transactionResponse;
+                const { transaction: base64Transaction, metadata } = transactionResponse;
                 console.log("Generated transaction:", base64Transaction);
+                console.log("Transaction metadata:", metadata);
 
                 // Step 2: Sign the transaction
                 updateTransactionStatus(transactionId, { status: 'building' });
@@ -78,24 +80,30 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                     }]
                 });
 
-                if (!confirmResponse || !confirmResponse.signatures || confirmResponse.signatures.length === 0) {
+                if (!confirmResponse) {
                     throw new Error("Failed to confirm transaction");
                 }
 
-                const result = confirmResponse;
-                console.log("Transaction confirmed:", result);
+                const { signatures, transactions } = confirmResponse;
+                
+                if (!signatures || signatures.length === 0 || !signatures[0]) {
+                    throw new Error("No signature returned from confirmation");
+                }
 
-                if (result.signatures[0]) {
+                const confirmedTransaction = transactions?.[0];
+                console.log("Transaction confirmed:", confirmedTransaction);
+
+                if (confirmedTransaction?.status === 'confirmed') {
                     // Update toast to success
                     updateTransactionStatus(transactionId, { 
                         status: 'success',
-                        signature: result.signatures[0]
+                        signature: signatures[0]
                     });
                     
                     // Call the success callback
-                    onSuccess(result.signatures[0]);
+                    onSuccess(signatures[0]);
                 } else {
-                    throw new Error("No signature returned from confirmation");
+                    throw new Error("Transaction confirmation failed");
                 }
 
             } catch (error) {

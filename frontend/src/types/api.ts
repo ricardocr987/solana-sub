@@ -18,3 +18,48 @@ export interface SubscriptionData {
   amount: number;
   walletAddress: string;
 }
+
+// API Response Types
+export interface SubscriptionTransactionResponse {
+  transaction: string;
+  amount: number;
+  metadata: {
+    tokenMint: string;
+    tokenSymbol: string;
+    tokenName: string;
+    tokenDecimals: number;
+    tokenLogoURI: string;
+    receiverAddress: string;
+    subscriptionPlans: {
+      monthly: {
+        pro1: { amount: number; duration: number };
+        pro2: { amount: number; duration: number };
+      };
+      yearly: {
+        pro1: { amount: number; duration: number };
+        pro2: { amount: number; duration: number };
+      };
+    };
+  };
+}
+
+export interface ConfirmSubscriptionResponse {
+  signatures: string[];
+  transactions: Array<{
+    signature: string;
+    status: 'confirmed' | 'failed';
+    payment: {
+      transaction_hash: string;
+      wallet_address: string;
+      amount_usdc: number;
+      payment_date: string;
+      subscription_duration_days?: number;
+    } | null;
+    subscriptionDetails: {
+      walletAddress: string;
+      amountUsdc: number;
+      durationDays: number;
+      plan: string;
+    } | null;
+  }>;
+}

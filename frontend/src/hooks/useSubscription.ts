@@ -1,45 +1,31 @@
 import { useState } from 'react'
-
-interface SubscriptionRequest {
-  account: string
-  amount: string
-}
-
-interface ConfirmRequest {
-  transactions: string[]
-  payments?: Array<{
-    transaction_hash: string
-    wallet_address: string
-    amount_usdc: number
-    payment_date: string
-    subscription_duration_days?: number
-  }>
-}
+import { api } from '../lib/api'
+import type { SubscriptionTransactionResponse, ConfirmSubscriptionResponse } from '../types/api'
 
 export const useSubscription = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const getSubscriptionTransaction = async (request: SubscriptionRequest) => {
+  const getSubscriptionTransaction = async (request: { account: string; amount: string }): Promise<SubscriptionTransactionResponse | null> => {
     setIsLoading(true)
     setError(null)
     
     try {
-      const response = await fetch("/api/subscription/transaction", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(request)
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Failed to get subscription transaction')
+      const { data, error } = await api.subscription.transaction.post(request)
+      
+      if (error) {
+        // Handle error based on status
+        if (error.status >= 400) {
+          throw new Error(error.value.message || `HTTP ${error.status} error`)
+        }
+        throw new Error(error.value.message || 'Unknown error')
       }
-
-      const data = await response.json()
-      return data
+      
+      if (!data) {
+        throw new Error('No data received from server')
+      }
+      
+      return data as SubscriptionTransactionResponse
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
       setError(errorMessage)
@@ -49,26 +35,35 @@ export const useSubscription = () => {
     }
   }
 
-  const confirmSubscription = async (request: ConfirmRequest) => {
+  const confirmSubscription = async (request: {
+    transactions: string[];
+    payments?: Array<{
+      transaction_hash: string;
+      wallet_address: string;
+      amount_usdc: number;
+      payment_date: string;
+      subscription_duration_days?: number;
+    }>;
+  }): Promise<ConfirmSubscriptionResponse | null> => {
     setIsLoading(true)
     setError(null)
-    
+
     try {
-      const response = await fetch("/api/confirm/transactions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(request)
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.message || 'Failed to confirm subscription')
+      const { data, error } = await api.confirm.transactions.post(request)
+      
+      if (error) {
+        // Handle error based on status
+        if (error.status >= 400) {
+          throw new Error(error.value.message || `HTTP ${error.status} error`)
+        }
+        throw new Error(error.value.message || 'Unknown error')
       }
-
-      const data = await response.json()
-      return data
+      
+      if (!data) {
+        throw new Error('No data received from server')
+      }
+      
+      return data as ConfirmSubscriptionResponse
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred'
       setError(errorMessage)

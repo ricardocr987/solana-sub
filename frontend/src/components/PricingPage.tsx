@@ -3,7 +3,7 @@ import { Card, CardContent } from './ui/card'
 import { useUserPlan } from '../hooks/useUserPlan'
 import { cn } from '../lib/utils'
 import { PricingCard } from './PricingCard'
-import { WalletConnection } from './solana/WalletConnection'
+import { ConnectWallet } from './ConnectWallet'
 import { useWallet } from '../context/WalletContext'
 import type { TokenInfo } from '../types/api'
 
@@ -91,8 +91,8 @@ export const PricingPage: React.FC = () => {
     <div className="fixed inset-0 bg-gray-900 text-white overflow-auto">
       <div className="w-full p-8">
         {/* Header */}
-        <div className="mb-12">
-          <div className="flex items-center justify-between mb-2">
+        <div className="mb-8">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-green-500 rounded flex items-center justify-center">
                 <svg
@@ -117,18 +117,18 @@ export const PricingPage: React.FC = () => {
                 </svg>
               </div>
               <div>
-                <h1 className="text-3xl font-bold">Pricing</h1>
-                <p className="text-gray-400">Your plans & billing</p>
+                <h1 className="text-2xl font-bold">Pricing</h1>
+                <p className="text-gray-400 text-sm">Your plans & billing</p>
               </div>
             </div>
-            <WalletConnection />
+            <ConnectWallet />
           </div>
-          <div className="h-px bg-gray-700"></div>
+          <div className="h-px bg-gray-700 mt-4"></div>
         </div>
 
         {/* Main Title and Toggle */}
-        <div className="flex items-center justify-center gap-6 mb-12">
-          <h2 className="text-4xl font-bold">
+        <div className="flex items-center justify-center gap-6 mb-8">
+          <h2 className="text-3xl font-bold">
             Subscription demo
           </h2>
           
@@ -164,7 +164,7 @@ export const PricingPage: React.FC = () => {
         </div>
 
         {/* Pricing Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-12">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           {pricingPlans.map((plan, index) => (
             <PricingCard
               key={index}

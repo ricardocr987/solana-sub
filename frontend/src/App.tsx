@@ -1,15 +1,17 @@
 import { PricingPage } from "./components/PricingPage";
-import { SolanaProvider } from "./context/SolanaProvider";
 import { TransactionToastProvider } from "./context/TransactionToastContext";
+import { WalletProvider } from "./context/WalletContext";
+import { Toaster } from "./components/ui/toaster";
 import "./index.css";
 
 export function App() {
   return (
-    <SolanaProvider>
+    <WalletProvider>
       <TransactionToastProvider>
         <PricingPage />
       </TransactionToastProvider>
-    </SolanaProvider>
+      <Toaster />
+    </WalletProvider>
   );
 }
 
