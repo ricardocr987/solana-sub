@@ -1,13 +1,13 @@
-# Subscription System Demo: Building a Solana-Powered Subscription Service
+# Building a Solana-Powered Subscription Service
 
-> **A complete guide to building a subscription system on Solana with end-to-end type safety, secure transaction handling, and modern web technologies.**
+> **A complete guide to build a subscription system on Solana with backend-frontend type safety and secure transaction handling.**
 
 ## 🎯 Overview
 
-This project demonstrates how to build a production-ready subscription system on Solana using cutting-edge technologies. You'll learn how to create a secure, scalable subscription service that handles USDC payments, manages user subscriptions, and provides a seamless developer experience.
+You'll learn how to create a secure subscription service that handles USDC payments and manages user subscriptions.
 
 **Key Features:**
-- 🔐 **Secure Transaction Flow**: Build and confirm transactions on the server, sign them on the react client. Keep your RPC keys secure on the server.
+- 🔐 **Secure Transaction Flow**: Build and confirm transactions on the server to keep RPC key secure, sign them on the react client.
 - 🚀 **Modern Stack**: Elysia + Bun for both frontend and backend
 - 🔗 **Type Safety**: Full-stack type safety with Eden integration
 - 💰 **USDC Payments**: Handle real USDC transactions on Solana mainnet
@@ -28,9 +28,8 @@ solana-sub/
 │   │   │   ├── getTokenMetadata.ts  # Token metadata retrieval
 │   │   │   ├── rpc.ts               # RPC connection setup
 │   │   │   └── transaction/         # Transaction handling
-│   │   │       ├── compute.ts       # Compute budget optimization
-│   │   │       ├── confirm.ts       # WebSocket confirmation setup
-│   │   │       ├── prepare.ts       # Transaction preparation
+│   │   │       ├── compute.ts       # Build compute budget instructions
+│   │   │       ├── prepare.ts       # Converts instructions into a transaction with CU set
 │   │   │       ├── send.ts          # Transaction sending & confirmation
 │   │   │       ├── transferInstruction.ts # USDC transfer instruction
 │   │   │       └── validate.ts      # Transaction validation
@@ -102,10 +101,9 @@ solana-sub/
 
 Before you begin, ensure you have:
 
-- **Node.js 18+** or **Bun 1.0+** (recommended)
-- **Solana CLI** tools installed
-- A **Solana wallet** with some SOL for transaction fees
-- **USDC tokens** in your wallet for testing
+- **Bun**: https://bun.com/docs/installation
+- A **Solana wallet** with some SOL and USDC as a user
+- The address of the **RECEIVER** in the backend environment requires the USDC token account to be opened, so send some USDC there.
 - Basic knowledge of **TypeScript** and **React**
 
 ## 🚀 Quick Start
@@ -113,7 +111,7 @@ Before you begin, ensure you have:
 ### 1. Clone and Install
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/ricardocr987/solana-sub
 cd solana-sub
 bun install
 ```
@@ -149,7 +147,7 @@ Visit `http://localhost:8080` to see your subscription system in action!
 
 ## 🔄 Transaction Flow: The Complete Journey
 
-The subscription system implements a **three-phase transaction flow** that ensures security and reliability:
+The subscription system implements a **three-phase transaction flow**:
 
 ### Phase 1: Server-Side Transaction Building
 
