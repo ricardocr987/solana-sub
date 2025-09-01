@@ -4,7 +4,7 @@ import { type UiWalletAccount } from "@wallet-standard/react";
 import { useCallback } from "react";
 import { Button } from "./ui/button";
 import { useTransactionToast } from "../context/TransactionToastContext";
-import { getBase64Encoder } from "@solana/kit";
+import { getBase64Decoder, getBase64Encoder } from "@solana/kit";
 import { api } from "../lib/api";
 import bs58 from 'bs58';
 
@@ -68,7 +68,7 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                     transaction: transactionBytes as Uint8Array,
                 });
                 // Convert signed transaction to base64 for sending to backend
-                const serializedTransaction = bs58.encode(Buffer.from(signedTransaction));
+                const serializedTransaction = getBase64Decoder().decode(signedTransaction);
                 console.log('Serialized transaction (base64) length:', serializedTransaction.length);
                 console.log('Serialized transaction preview:',  serializedTransaction);
 

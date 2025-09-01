@@ -250,7 +250,7 @@ export async function updateSubscription(
 export async function getPaymentByTransactionHash(transaction_hash: string): Promise<Payment | null> {
   try {
     const stmt = db.prepare(`
-      SELECT * FROM payments WHERE transaction_hash = ?
+      SELECT * FROM payments WHERE transaction_hash = ? AND status = 'confirmed'
     `);
 
     const result = stmt.get(transaction_hash) as any;

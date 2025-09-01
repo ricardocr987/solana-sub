@@ -113,6 +113,7 @@ function ConnectWalletMenuItem({ onAccountSelect, onDisconnect, onError, wallet 
     const [isDisconnecting, disconnect] = useDisconnect(wallet);
     const isPending = isConnecting || isDisconnecting;
     const isConnected = wallet.accounts.length > 0;
+    const hasMultipleAccounts = wallet.accounts.length > 1;
     const { selectedAccount } = useWallet();
 
     const handleConnectClick = useCallback(async () => {
@@ -135,11 +136,59 @@ function ConnectWalletMenuItem({ onAccountSelect, onDisconnect, onError, wallet 
         }
     }, [connect, onAccountSelect, onError, wallet.accounts, wallet]);
 
+    // When not connected, show a simple menu item that connects directly
+    if (!isConnected) {
+        return (
+            <DropdownMenuItem
+                disabled={isPending}
+                onClick={handleConnectClick}
+                className="flex items-center gap-3 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors text-white cursor-pointer"
+            >
+                {wallet.icon && (
+                    <img src={wallet.icon} alt={wallet.name} className="w-5 h-5" />
+                )}
+                <span className="text-white text-sm">{wallet.name}</span>
+            </DropdownMenuItem>
+        );
+    }
+
+    // When connected but only has 0 or 1 account, show simple item without submenu
+    if (!hasMultipleAccounts) {
+        return (
+            <DropdownMenuItem
+                disabled={isPending}
+                className="flex items-center gap-3 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors text-white cursor-pointer"
+            >
+                {wallet.icon && (
+                    <img src={wallet.icon} alt={wallet.name} className="w-5 h-5" />
+                )}
+                <span className="text-white text-sm">{wallet.name}</span>
+                <div className="ml-auto">
+                    <Button
+                        onClick={async () => {
+                            try {
+                                await disconnect();
+                                onDisconnect(wallet);
+                            } catch (e) {
+                                onError(e);
+                            }
+                        }}
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-xs text-red-400 border-red-400 hover:bg-red-400 hover:text-white"
+                    >
+                        Disconnect
+                    </Button>
+                </div>
+            </DropdownMenuItem>
+        );
+    }
+
+    // When connected and has multiple accounts, show the submenu for account selection and management
     return (
         <DropdownMenuSub>
             <DropdownMenuSubTrigger
                 disabled={isPending}
-                onClick={!isConnected ? handleConnectClick : undefined}
                 className="flex items-center justify-between w-full p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors text-white"
             >
                 <div className="flex items-center gap-3">
@@ -148,9 +197,7 @@ function ConnectWalletMenuItem({ onAccountSelect, onDisconnect, onError, wallet 
                     )}
                     <span className="text-white text-sm">{wallet.name}</span>
                 </div>
-                {isConnected ? (
-                    <ChevronRight className="w-4 h-4 text-gray-400" />
-                ) : null}
+                <ChevronRight className="w-4 h-4 text-gray-400" />
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="bg-gray-800 border-gray-700">
                 <DropdownMenuLabel className="text-gray-300">Accounts</DropdownMenuLabel>
@@ -162,7 +209,7 @@ function ConnectWalletMenuItem({ onAccountSelect, onDisconnect, onError, wallet 
                             onSelect={() => {
                                 onAccountSelect(account, wallet);
                             }}
-                            className="text-white hover:bg-gray-700 focus:bg-gray-700"
+                            className="text-gray-300 hover:bg-gray-700 focus:bg-gray-700"
                         >
                             {account.address.slice(0, 8)}...
                         </DropdownMenuRadioItem>

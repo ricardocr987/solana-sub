@@ -5,8 +5,6 @@ import {
   appendTransactionMessageInstructions,
   setTransactionMessageLifetimeUsingBlockhash,
   type Instruction,
-  AddressesByLookupTableAddress,
-  compressTransactionMessageUsingAddressLookupTables,
   address,
   compileTransaction,
   getBase64EncodedWireTransaction,

@@ -1,6 +1,8 @@
 import Elysia, { t } from 'elysia';
 import { validateTransaction } from '../solana/transaction/validate';
 import { sendTransaction } from '../solana/transaction/send';
+import { rpc } from '../solana/rpc';
+import { Signature } from '@solana/kit';
 
 // Elysia endpoint
 const confirm = new Elysia({ prefix: '/confirm' })
@@ -24,12 +26,26 @@ const confirm = new Elysia({ prefix: '/confirm' })
             
             if (signature && payment) {
               try {
+                // Fetch the confirmed transaction to pass to validateTransaction
+                const confirmedTransaction = await rpc.getTransaction(signature as Signature, {
+                  commitment: 'confirmed',
+                  encoding: 'jsonParsed',
+                  maxSupportedTransactionVersion: 0,
+                }).send();
+
+                if (!confirmedTransaction) {
+                  throw new Error('Failed to fetch confirmed transaction');
+                }
+
+                // Check if transaction failed
+                if (confirmedTransaction.meta?.err) {
+                  throw new Error(`Transaction failed: ${JSON.stringify(confirmedTransaction.meta.err)}`);
+                }
+
                 // Use validate.ts to handle payment storage and subscription management
                 const validatedSubscription = await validateTransaction(
                   signature,
-                  payment.wallet_address,
-                  payment.amount_usdc,
-                  payment.subscription_duration_days || 30
+                  confirmedTransaction
                 );
                 
                 console.log(`Payment validated and stored for transaction: ${payment.transaction_hash}`);

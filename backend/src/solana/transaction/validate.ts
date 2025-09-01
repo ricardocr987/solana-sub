@@ -1,27 +1,9 @@
-import { 
-  type Address,
-  getBase64Encoder,
-  getTransactionDecoder,
-  getCompiledTransactionMessageDecoder,
-  decompileTransactionMessageFetchingLookupTables,
-  assertIsInstructionWithData,
-  assertIsInstructionWithAccounts,
-  type Signature
-} from '@solana/kit';
-import { 
-  identifyTokenInstruction, 
-  TokenInstruction,
-  parseTransferCheckedInstruction,
-  getTransferInstructionDataDecoder
-} from '@solana-program/token';
-import { getTransferSolInstructionDataDecoder } from '@solana-program/system';
 import { addPayment, getPaymentByTransactionHash, upsertSubscription } from '../../db';
 import { rpc } from '../rpc';
+import BigNumber from "bignumber.js";
 
 // Constants
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const SYSTEM_PROGRAM = '11111111111111111111111111111111';
-const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
 interface ValidatedSubscription {
   signature: string;
@@ -33,98 +15,309 @@ interface ValidatedSubscription {
   planType: string;
 }
 
+interface PaymentDetails {
+  walletAddress: string;
+  amountUsdc: number;
+  paymentMint: string;
+  recipient: string;
+}
+
+// Generic transaction type for meta data access
+interface TransactionWithMeta {
+  meta?: {
+    preTokenBalances?: Array<{
+      owner: string;
+      mint: string;
+      uiTokenAmount: {
+        amount: string;
+        decimals: number;
+      };
+    }>;
+    postTokenBalances?: Array<{
+      owner: string;
+      mint: string;
+      uiTokenAmount: {
+        amount: string;
+        decimals: number;
+      };
+    }>;
+    preBalances?: readonly bigint[];
+    postBalances?: readonly bigint[];
+    err?: any;
+  };
+  transaction?: {
+    message?: {
+      header?: {
+        numRequiredSignatures?: number;
+      };
+      accountKeys?: Array<{ pubkey: string; signer?: boolean }>;
+    };
+  };
+}
+
+/**
+ * Extract payment details from transaction meta data
+ */
+function extractPaymentDetailsFromMeta(
+  tx: TransactionWithMeta | null,
+  signature: string
+): PaymentDetails | null {
+  try {
+    if (!tx?.meta) {
+      console.log('No transaction meta data available');
+      return null;
+    }
+
+    // Get message from transaction
+    const message = tx.transaction?.message;
+    if (!message) return null;
+
+    // Find the first signer from the account keys
+    const accountKeys = message.accountKeys || [];
+    console.log('Account keys:', accountKeys);
+    
+    // Find the signer (fee payer) - first account with signer = true
+    const signerIndex = accountKeys.findIndex(key => key.signer === true);
+    if (signerIndex === -1) {
+      console.log('No signer found in transaction');
+      return null;
+    }
+
+    // Get signer's public key
+    const signer = accountKeys[signerIndex]?.pubkey;
+    if (!signer) return null;
+    
+    console.log('Fee payer (wallet address):', signer);
+    
+    // Get pre and post token balances
+    const preBalances = tx.meta.preTokenBalances || [];
+    const postBalances = tx.meta.postTokenBalances || [];
+    
+    // Get pre and post SOL balances
+    const preSOLBalances = tx.meta.preBalances || [];
+    const postSOLBalances = tx.meta.postBalances || [];
+    
+    console.log('Pre token balances:', preBalances);
+    console.log('Post token balances:', postBalances);
+    console.log('Pre SOL balances:', preSOLBalances);
+    console.log('Post SOL balances:', postSOLBalances);
+
+    // Map balances by mint to calculate changes
+    const balanceMap = new Map<string, {
+      mint: string;
+      preAmount: BigNumber;
+      postAmount: BigNumber;
+      difference: BigNumber;
+      preAmountRaw: string;
+      postAmountRaw: string;
+      differenceRaw: string;
+      decimals: number;
+    }>();
+    
+    // Process pre-balances for tokens
+    preBalances.forEach((balance: any) => {
+      if (balance.owner === signer) {
+        const existing = balanceMap.get(balance.mint);
+        if (existing) {
+          existing.preAmountRaw = balance.uiTokenAmount.amount;
+          existing.preAmount = new BigNumber(balance.uiTokenAmount.amount)
+              .div(new BigNumber(10).pow(balance.uiTokenAmount.decimals));
+        } else {
+          const preAmountRaw = balance.uiTokenAmount.amount;
+          const decimals = balance.uiTokenAmount.decimals;
+          
+          balanceMap.set(balance.mint, {
+            mint: balance.mint,
+            preAmount: new BigNumber(preAmountRaw)
+                .div(new BigNumber(10).pow(decimals)),
+            postAmount: new BigNumber(0),
+            difference: new BigNumber(preAmountRaw)
+                .div(new BigNumber(10).pow(decimals))
+                .negated(),
+            preAmountRaw: preAmountRaw,
+            postAmountRaw: "0",
+            differenceRaw: new BigNumber(preAmountRaw).negated().toString(),
+            decimals: decimals
+          });
+        }
+      }
+    });
+
+    // Process post-balances for tokens and calculate differences
+    postBalances.forEach((balance: any) => {
+      if (balance.owner === signer) {
+        const existing = balanceMap.get(balance.mint);
+        if (existing) {
+          // Use raw amounts and decimals for precise calculation
+          const postAmountRaw = balance.uiTokenAmount.amount;
+          const preAmountRaw = existing.preAmountRaw || "0";
+          const decimals = balance.uiTokenAmount.decimals;
+          
+          // Calculate differences using BigNumber
+          const postAmount = new BigNumber(postAmountRaw)
+              .div(new BigNumber(10).pow(decimals));
+          const preAmount = new BigNumber(preAmountRaw)
+              .div(new BigNumber(10).pow(decimals));
+          const difference = postAmount.minus(preAmount);
+          
+          existing.postAmount = postAmount;
+          existing.difference = difference;
+          existing.preAmountRaw = existing.preAmountRaw || "0";
+          existing.postAmountRaw = postAmountRaw;
+          existing.differenceRaw = difference.times(new BigNumber(10).pow(decimals)).toString();
+          existing.decimals = decimals;
+        } else {
+          const postAmountRaw = balance.uiTokenAmount.amount;
+          const decimals = balance.uiTokenAmount.decimals;
+          
+          balanceMap.set(balance.mint, {
+            mint: balance.mint,
+            preAmount: new BigNumber(0),
+            postAmount: new BigNumber(postAmountRaw)
+                .div(new BigNumber(10).pow(decimals)),
+            difference: new BigNumber(postAmountRaw)
+                .div(new BigNumber(10).pow(decimals)),
+            preAmountRaw: "0",
+            postAmountRaw: postAmountRaw,
+            differenceRaw: postAmountRaw,
+            decimals: decimals
+          });
+        }
+      }
+    });
+
+    // Handle SOL balance changes for the signer
+    const preSOLAmount = new BigNumber(preSOLBalances[signerIndex]?.toString() || '0')
+        .div(new BigNumber(10).pow(9));
+    const postSOLAmount = new BigNumber(postSOLBalances[signerIndex]?.toString() || '0')
+        .div(new BigNumber(10).pow(9));
+    const solDifference = postSOLAmount.minus(preSOLAmount);
+
+    if (!solDifference.isZero()) {
+      balanceMap.set("So11111111111111111111111111111111111111112", {
+        mint: "So11111111111111111111111111111111111111112",
+        preAmount: preSOLAmount,
+        postAmount: postSOLAmount,
+        difference: solDifference,
+        preAmountRaw: preSOLBalances[signerIndex]?.toString() || "0",
+        postAmountRaw: postSOLBalances[signerIndex]?.toString() || "0",
+        differenceRaw: solDifference.times(new BigNumber(10).pow(9)).toString(),
+        decimals: 9
+      });
+    }
+
+    console.log('Balance map:', Array.from(balanceMap.entries()));
+
+    // Find USDC balance changes specifically
+    const usdcBalance = balanceMap.get(USDC_MINT);
+    if (!usdcBalance) {
+      console.log('No USDC balance changes found');
+      return null;
+    }
+
+    console.log('USDC balance changes:', usdcBalance);
+
+    // Check if USDC was sent (negative difference)
+    if (!usdcBalance.difference.isNegative()) {
+      console.log('No USDC payment found (difference is not negative)');
+      return null;
+    }
+
+    const amountUsdc = usdcBalance.difference.abs().toNumber();
+    console.log('USDC payment amount:', amountUsdc);
+
+    // Find recipient - look for the account that received the USDC
+    // This is a simplified approach - you might need to analyze instructions for more accuracy
+    let recipient = '';
+    
+    // Look for accounts in the transaction that could be the recipient
+    // Usually the second account (index 1) is the recipient in simple transfers
+    if (accountKeys.length > 1) {
+      recipient = accountKeys[1]?.pubkey || '';
+      console.log('Recipient (from account index 1):', recipient);
+    }
+
+    // If no recipient found, try to find from token balance changes
+    if (!recipient) {
+      // Look for accounts that might have received USDC
+      postBalances.forEach((balance: any) => {
+        if (balance.mint === USDC_MINT && balance.owner !== signer) {
+          recipient = balance.owner;
+          console.log('Recipient found from token balance:', recipient);
+        }
+      });
+    }
+
+    if (!recipient) {
+      console.log('Could not determine recipient');
+      return null;
+    }
+
+    return {
+      walletAddress: signer,
+      amountUsdc,
+      paymentMint: USDC_MINT,
+      recipient
+    };
+
+  } catch (error) {
+    console.error('Error extracting payment details from meta:', error);
+    return null;
+  }
+}
+
 /**
  * Validate a transaction and store subscription payment details
+ * This function now receives the confirmed transaction directly
  */
 export async function validateTransaction(
   signature: string,
-  walletAddress: string,
-  amountUsdc: number,
-  subscriptionDurationDays: number = 30
+  confirmedTransaction: any
 ): Promise<ValidatedSubscription> {  
   // Check if payment already exists
   const existingPayment = await getPaymentByTransactionHash(signature);
+  console.log('Existing payment:', existingPayment);
   if (existingPayment) {
     throw new Error('Payment already processed');
   }
 
   try {
-    // Fetch transaction details
-    const response = await rpc.getTransaction(signature as Signature, {
-      maxSupportedTransactionVersion: 0,
-      encoding: 'base64'
-    }).send();
-
-    if (!response) {
-      throw new Error('Failed to fetch transaction');
+    // Extract payment details from the confirmed transaction
+    console.log('Confirmed transaction:', confirmedTransaction);
+    const paymentDetails = extractPaymentDetailsFromMeta(confirmedTransaction, signature);
+    if (!paymentDetails) {
+      throw new Error('Failed to extract payment details from transaction');
     }
 
-    // Decode and validate transaction
-    const base64Encoder = getBase64Encoder();
-    const transactionBytes = base64Encoder.encode(response.transaction[1]);
-    const transactionDecoder = getTransactionDecoder();
-    const decodedTransaction = transactionDecoder.decode(transactionBytes);
+    console.log('Payment details extracted:', paymentDetails);
 
-    // Get transaction signers
-    const signers = Object.entries(decodedTransaction.signatures)
-      .map(([address, signature]) => ({
-        address: address as Address,
-        signature: signature?.toString() || null
-      }));
-
-    if (signers.length === 0) {
-      throw new Error('No signers found in transaction');
+    // Validate minimum amount
+    if (paymentDetails.amountUsdc < 2) {
+      throw new Error(`Amount too low: ${paymentDetails.amountUsdc}, minimum required: 2`);
     }
 
-    const primarySigner = signers[0];
-    if (!primarySigner.signature) {
-      throw new Error('Primary signer has not signed the transaction');
-    }
-
-    // Decode message and find transfer instruction
-    const messageDecoder = getCompiledTransactionMessageDecoder();
-    const compiledMessage = messageDecoder.decode(decodedTransaction.messageBytes);
-    const message = await decompileTransactionMessageFetchingLookupTables(
-      compiledMessage,
-      rpc
-    );
-
-    const payInstruction = message.instructions[message.instructions.length - 1];
-    if (!payInstruction) {
-      throw new Error('Missing transfer instruction');
-    }
-
-    // Validate instruction type
-    assertIsInstructionWithData(payInstruction);
-    assertIsInstructionWithAccounts(payInstruction);
+    // Determine subscription duration based on amount
+    let subscriptionDurationDays = 30; // Default to monthly
     
-    const instructionType = identifyTokenInstruction(payInstruction);
-    if (instructionType !== TokenInstruction.TransferChecked) {
-      throw new Error('Not a transfer checked instruction');
-    }
-
-    // Parse instruction data
-    const parsedInstruction = parseTransferCheckedInstruction(payInstruction as any);
-    const { accounts, data } = parsedInstruction;
-
-    // Validate payment details
-    if (accounts.mint.address !== USDC_MINT) {
-      throw new Error('Invalid currency - only USDC supported');
+    if (paymentDetails.amountUsdc >= 100) {
+      subscriptionDurationDays = 365; // Yearly subscription
+    } else if (paymentDetails.amountUsdc >= 10) {
+      subscriptionDurationDays = 30; // Monthly subscription
+    } else if (paymentDetails.amountUsdc >= 2) {
+      subscriptionDurationDays = 30; // Monthly subscription
     }
     
-    if (data.amount <= 0n) {
-      throw new Error('Invalid amount');
-    }
+    console.log(`Subscription duration: ${subscriptionDurationDays} days`);
 
     // Determine subscription plan type
-    const planType = getPlanTypeFromAmount(amountUsdc, subscriptionDurationDays);
+    const planType = getPlanTypeFromAmount(paymentDetails.amountUsdc, subscriptionDurationDays);
 
     // Create payment record
     const paymentDate = new Date();
     const success = await addPayment({
       transaction_hash: signature,
-      wallet_address: walletAddress,
-      amount_usdc: amountUsdc,
+      wallet_address: paymentDetails.walletAddress,
+      amount_usdc: paymentDetails.amountUsdc,
       payment_date: paymentDate,
       subscription_duration_days: subscriptionDurationDays,
       status: 'confirmed'
@@ -138,151 +331,22 @@ export async function validateTransaction(
     const subscriptionEndDate = new Date(paymentDate);
     subscriptionEndDate.setDate(subscriptionEndDate.getDate() + subscriptionDurationDays);
     
-    const subscriptionSuccess = await upsertSubscription(walletAddress, subscriptionEndDate);
+    const subscriptionSuccess = await upsertSubscription(paymentDetails.walletAddress, subscriptionEndDate);
     if (!subscriptionSuccess) {
-      console.warn(`Failed to update subscription for wallet: ${walletAddress}`);
+      console.warn(`Failed to update subscription for wallet: ${paymentDetails.walletAddress}`);
     }
 
     return {
       signature,
-      signer: primarySigner.address.toString(),
-      recipient: accounts.destination.address.toString(),
-      amount: amountUsdc,
-      currency: accounts.mint.address.toString(),
+      signer: paymentDetails.walletAddress,
+      recipient: paymentDetails.recipient,
+      amount: paymentDetails.amountUsdc,
+      currency: paymentDetails.paymentMint,
       subscriptionDurationDays,
       planType
     };
   } catch (error) {
     console.error('Error validating transaction:', error);
-    throw error;
-  }
-}
-
-/**
- * Validate a transaction from signature and extract subscription details
- */
-export async function validateTransactionFromSignature(signature: string): Promise<ValidatedSubscription> {
-  try {
-    console.log(`Validating transaction from signature: ${signature}`);
-    
-    // Get transaction details from Solana
-    const parsedTransaction = await rpc.getTransaction(signature as any, {
-      commitment: 'confirmed',
-      encoding: 'jsonParsed',
-      maxSupportedTransactionVersion: 0,
-    }).send();
-    
-    if (!parsedTransaction) {
-      throw new Error('Transaction not found or not confirmed');
-    }
-    
-    const tx = parsedTransaction;
-    
-    // Check if transaction failed
-    if (tx.meta?.err) {
-      throw new Error(`Transaction failed: ${JSON.stringify(tx.meta.err)}`);
-    }
-    
-    // Extract fee payer (wallet address)
-    const feePayerIndex = tx.transaction.message.accountKeys.findIndex(
-      (key: any) => key.signer === true
-    );
-    
-    if (feePayerIndex === -1) {
-      throw new Error('No fee payer found in transaction');
-    }
-    
-    const walletAddress = tx.transaction.message.accountKeys[feePayerIndex].pubkey;
-    console.log('Fee payer (wallet address):', walletAddress);
-    
-    // Find transfer instruction
-    const instructions = tx.transaction.message.instructions;
-    let transferInstruction = null;
-    
-    for (const instruction of instructions) {
-      if (instruction.programId === TOKEN_PROGRAM || instruction.programId === SYSTEM_PROGRAM) {
-        transferInstruction = instruction;
-        break;
-      }
-    }
-    
-    if (!transferInstruction) {
-      throw new Error('No transfer instruction found');
-    }
-    
-    // Extract amount and determine subscription duration
-    let amountUsdc = 0;
-    let subscriptionDurationDays = 30; // Default to monthly
-    
-    if (transferInstruction.programId === TOKEN_PROGRAM) {
-      // SPL token transfer (USDC)
-      try {
-        if ('data' in transferInstruction && transferInstruction.data) {
-          const data = transferInstruction.data;
-          if (data && data.length >= 8) {
-            const dataBytes = getBase64Encoder().encode(data);
-            const decodedData = getTransferInstructionDataDecoder().decode(dataBytes);
-            
-            if (decodedData && decodedData.amount) {
-              amountUsdc = Number(decodedData.amount) / Math.pow(10, 6);
-              console.log(`USDC amount: ${amountUsdc}`);
-            } else {
-              throw new Error('Failed to decode transfer instruction data');
-            }
-          }
-        } else {
-          throw new Error('No data found in transfer instruction');
-        }
-      } catch (error) {
-        console.error('Error decoding USDC transfer instruction:', error);
-        throw new Error('Failed to decode USDC transfer instruction');
-      }
-    } else if (transferInstruction.programId === SYSTEM_PROGRAM) {
-      // SOL transfer
-      try {
-        if ('data' in transferInstruction && transferInstruction.data) {
-          const data = transferInstruction.data;
-          if (data && data.length >= 8) {
-            const dataBytes = getBase64Encoder().encode(data);
-            const decodedData = getTransferSolInstructionDataDecoder().decode(dataBytes);
-            
-            if (decodedData && decodedData.amount) {
-              amountUsdc = Number(decodedData.amount) / Math.pow(10, 9);
-              console.log(`SOL amount: ${amountUsdc}`);
-            } else {
-              throw new Error('Failed to decode SOL transfer instruction data');
-            }
-          }
-        } else {
-          throw new Error('No data found in SOL transfer instruction');
-        }
-      } catch (error) {
-        console.error('Error decoding SOL transfer instruction:', error);
-        throw new Error('Failed to decode SOL transfer instruction');
-      }
-    }
-    
-    // Determine subscription duration based on amount
-    if (amountUsdc >= 100) {
-      subscriptionDurationDays = 365; // Yearly subscription
-    } else if (amountUsdc >= 10) {
-      subscriptionDurationDays = 30; // Monthly subscription
-    } else if (amountUsdc >= 2) {
-      subscriptionDurationDays = 30; // Monthly subscription
-    }
-    
-    console.log(`Subscription duration: ${subscriptionDurationDays} days`);
-    
-    // Validate minimum amount
-    if (amountUsdc < 2) {
-      throw new Error(`Amount too low: ${amountUsdc}, minimum required: 2`);
-    }
-    
-    // Validate and store the transaction with subscription data
-    return await validateTransaction(signature, walletAddress, amountUsdc, subscriptionDurationDays);
-    
-  } catch (error) {
-    console.error('Error validating transaction from signature:', error);
     throw error;
   }
 }
