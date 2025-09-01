@@ -118,10 +118,7 @@ The backend builds transactions with compute budget optimization:
 .post('/transaction', async ({ body: { account, amount: uiAmount } }) => {
     try {
         // 1. Validate user balance before building transaction
-        const balance = await validateAmount(account, USDC_MINT, amount);
-        if (!balance.isValid) {
-            return Response.json({ message: balance.message }, { status: 400 });
-        }
+        await validateAmount(account, USDC_MINT, amount);
         
         // 2. Create USDC transfer instruction
         const paymentInstruction = await transferInstruction(
@@ -194,7 +191,7 @@ The system now provides specific error messages for different failure scenarios:
 
 **Key Features:**
 - 🔍 **Pre-validation**: Check USDC balance before transaction building
-=- 📊 **Metadata Enrichment**: Include subscription plan information
+- 📊 **Metadata Enrichment**: Include subscription plan information
 - 💸 **Priority Fee**: Dynamic priority fee estimation
 
 ### 4. Sign Transaction
