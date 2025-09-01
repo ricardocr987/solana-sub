@@ -256,7 +256,7 @@ This dual-layer error handling provides:
 - 🎯 **User-Friendly Messages**: Clear explanations for different types of failures
 
 
-QuickNode API is used to get a priority fee estimate:
+QuickNode API is used to get a priority fee estimate to add on our transaction:
 
 ```typescript
 async function getPriorityFeeEstimate(): Promise<number> {
@@ -461,7 +461,7 @@ export async function sendTransaction(transaction: string): Promise<string> {
 
 **Confirmation with Error Handling:**
 
-The backend confirms transactions by polling the transaction with getTransaction RPC method, a better way would be using [signatureSubscribe](https://www.quicknode.com/docs/solana/signatureSubscribe) ws method:
+The backend confirms transactions by polling the transaction with [getTransaction](https://www.quicknode.com/docs/solana/getTransaction) RPC method. A better approach would be to use the [signatureSubscribe](https://www.quicknode.com/docs/solana/signatureSubscribe) WebSocket method:
 
 ```typescript
 // Backend: src/solana/transaction/send.ts
@@ -727,13 +727,6 @@ cd frontend
 bun run build
 # Deploy dist/ folder to your hosting provider
 ```
-
-## 📈 Performance Considerations
-
-### Backend Optimization
-
-- **Caching**: Strategic caching for frequently accessed data
-- **Parallel Processing**: Concurrent transaction confirmation
 
 
 ### Enhancements
