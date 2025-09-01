@@ -1,5 +1,8 @@
 # Solana Subscription Service
 
+<img width="1506" height="774" alt="image" src="https://github.com/user-attachments/assets/294bbabd-22b4-4ca2-8af3-4681e44e27a8" />
+
+
 ## 🎯 Overview
 
 This project demonstrates how to build a secure subscription service that handles USDC payments on Solana. It features a three-phase transaction flow that keeps RPC keys secure while providing full user control over transactions.
@@ -23,13 +26,18 @@ Before you begin, ensure you have:
 ## 🏗️ Architecture
 
 ```
-┌───────────────────────────┐                 ┌───────────────────────────┐
-│       React Frontend      │                 │       Elysia Backend      │
-│                           │  2. Request Tx  │                           │
-│ 1. Connect Wallet ───────────────►──────────│ 3. Build Transaction      │
-│ 4. Sign Transaction ◄───────────────◄────────│ 5. Confirm Transaction    │
-│ 6. Show Result                │              │ 6. Validate & Persist     │
-└───────────────────────────┘                 └───────────────────────────┘
+# Transaction Flow: React Frontend & Elysia Backend
+
+┌───────────────────────────┐                ┌───────────────────────────┐
+│    React Frontend         │                │    Elysia Backend         │
+├───────────────────────────┤                ├───────────────────────────┤
+│ 1. Connect Wallet         │ ── Request ──> │                           │
+│                           │                │ 2. Build Transaction      │
+│ 3. Sign Transaction       │ <── Tx Data ── │                           │
+│                           │                │ 4. Confirm Transaction    │
+│                           │ <── Tx Confirm │                           │
+│ 5. Show Result            │                │ 5. Validate & Persist     │
+└───────────────────────────┘                └───────────────────────────┘
 ```
 
 ## 🔄 Complete Transaction Flow
@@ -401,49 +409,6 @@ export const config = {
 
 **Never expose RPC keys in frontend code!**
 
-### CORS Configuration
-
-```typescript
-// Backend: src/index.ts
-.use(cors({
-  origin: ['http://localhost:8080', 'https://yourdomain.com'],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}))
-```
-
-## 🧪 Testing Your System
-
-### 1. Test Wallet Connection
-
-```bash
-# Start the frontend
-cd frontend
-bun run dev
-
-# Open http://localhost:8080
-# Click "Connect Wallet" and select your wallet
-```
-
-### 2. Test Transaction Flow
-
-```bash
-# Ensure you have USDC in your wallet
-# Select a subscription plan
-# Click "Confirm Payment"
-# Approve the transaction in your wallet
-```
-
-### 3. Monitor Backend Logs
-
-```bash
-# In your backend terminal, you should see:
-🚀 Request received: POST /subscription/transaction
-🔒 CORS Debug Info: Origin: http://localhost:8080
-📦 Request body: {"account":"...","amount":"49"}
-```
-
 ## 🚀 Deployment
 
 ### Environment Variables
@@ -452,7 +417,6 @@ bun run dev
 # Production .env
 QUICKNODE_RPC_URL=https://your-rpc-endpoint.com
 RECEIVER=your-production-wallet
-WEBHOOK_TOKEN=your-secure-token
 NODE_ENV=production
 ```
 
@@ -474,8 +438,8 @@ bun run build
 
 ### Enhancements
 
-1. **Webhook Integration**: Add Quicknode webhooks for real-time transaction monitoring
-2. **Multi-Token Support**: Extend beyond USDC to other SPL tokens
+1. **Webhook Integration**: Add Quicknode webhooks for real-time transaction confirmation
+2. **Multi-Token Support**: Extend beyond USDC to other SPL tokens, swap ExactOut
 3. **Analytics**: Implement transaction analytics and reporting
 4. **Mobile App**: Build React Native version using the same backend
 
@@ -501,6 +465,4 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
-**Built with ❤️ using Solana, Elysia, Bun, and Eden**
-
-*This project demonstrates modern Solana development practices and serves as a foundation for building production-ready dApps.*
+**Built with ❤️ using Solana, Elysia and Bun**
