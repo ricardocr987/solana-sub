@@ -20,7 +20,7 @@ Before you begin, ensure you have:
 
 - **Bun**: https://bun.com/docs/installation
 - A **Solana wallet** with some SOL and USDC as a user
-- The address of the **RECEIVER** in the backend environment requires the USDC token account to be opened.
+- The address of the **RECEIVER** in the backend environment requires the USDC token account to be opened
 
 ## 🏗️ Architecture
 
@@ -358,7 +358,7 @@ export function PaymentButton({ account, params }) {
 
 ### 5. Confirm Transaction
 
-The backend confirms transactions with comprehensive payment processing and subscription management:
+This endpoint handles confirmation of multiple transactions in parallel. After transactions are sent and confirmed on-chain, they undergo validation to verify they represent legitimate user payments to the recipient address. Once validated, payment records and subscription data are persisted to the database
 
 ```typescript
 // Backend: src/api/confirm.ts
@@ -417,7 +417,10 @@ The backend confirms transactions with comprehensive payment processing and subs
 })
 ```
 
-**Transaction Sending with Advanced Confirmation:**
+**Transaction Sending and confirmation:**
+
+[SendTransaction](https://www.quicknode.com/docs/solana/sendTransaction) rpc method is called with the optimal configuration and the base 64 encoded transaction
+
 ```typescript
 // Backend: src/solana/transaction/send.ts
 async function sendRawTransaction(wireTransaction: Base64EncodedWireTransaction): Promise<string> {
@@ -456,13 +459,16 @@ export async function sendTransaction(transaction: string): Promise<string> {
 }
 ```
 
-**Advanced Retry-Based Confirmation with Error Handling:**
+**Confirmation with Error Handling:**
+
+The backend confirms transactions by polling the transaction with getTransaction RPC method, a better way would be using [signatureSubscribe](https://www.quicknode.com/docs/solana/signatureSubscribe) ws method:
+
 ```typescript
 // Backend: src/solana/transaction/send.ts
 async function confirmSignature(signature: Signature): Promise<string> {
   const MAX_RETRIES = 5;
-  const RETRY_INTERVAL = 1000; // 500ms between retries
-  const TIMEOUT_DURATION = 6000; // 2 seconds total timeout
+  const RETRY_INTERVAL = 1000; // 1000ms between retries
+  const TIMEOUT_DURATION = 6000; // 6 seconds total timeout
   
   console.log(`Starting confirmation for signature: ${signature}`);
   
@@ -555,8 +561,7 @@ async function confirmSignature(signature: Signature): Promise<string> {
 
 ### 6. Validate & Persist
 
-The system validates transactions, extracts payment details, and automatically determines subscription plans based on payment amounts:
-
+The system validates transactions, extracts payment details and determines subscription plans based on payment amounts:
 
 ```typescript
 // Key validation functions and logic
