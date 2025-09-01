@@ -111,7 +111,10 @@ const { data, error } = await api.subscription.transaction.post({
 ### 3. Build Transaction
 **Files:** `backend/src/api/subscription.ts`, `backend/src/solana/transaction/prepare.ts`, `backend/src/solana/transaction/compute.ts`, `backend/src/solana/transaction/transferInstruction.ts`
 
-The backend builds transactions with compute budget optimization:
+**Key Features:**
+- 🔍 **Validation**: Check USDC balance before transaction building and logs on the simulation
+- 📊 **Metadata Enrichment**: Include metadata information about plans and the transaction
+- 💸 **Priority Fee**: Dynamic priority fee estimation using Quicknode
 
 ```typescript
 // Backend: src/api/subscription.ts
@@ -184,15 +187,224 @@ export async function prepareTransaction(
 **Error Handling:**
 The system now provides specific error messages for different failure scenarios:
 
-- **Insufficient USDC Balance**: "Insufficient USDC balance for this transaction"
-- **Insufficient SOL for Fees**: "You need more SOL to pay for transaction fees"
-- **Invalid Amount**: "Amount must be greater than 0!"
-=- **Transaction Simulation Errors**: Detailed logs with specific error messages
+**Solana Transaction Log Compilation (`compute.ts`):**
 
-**Key Features:**
-- 🔍 **Pre-validation**: Check USDC balance before transaction building
-- 📊 **Metadata Enrichment**: Include subscription plan information
-- 💸 **Priority Fee**: Dynamic priority fee estimation
+```typescript
+// Backend: src/solana/transaction/compute.ts
+async function getComputeUnits(wireTransaction: Base64EncodedWireTransaction): Promise<number> {
+  const simulation = await rpc.simulateTransaction(wireTransaction, {
+    sigVerify: false,
+    encoding: 'base64',
+  }).send();
+
+  if (simulation.value.err && simulation.value.logs) {
+    // Early detection of insufficient funds
+    const hasInsufficientFunds = simulation.value.logs.some(log => 
+      log.includes('insufficient funds') || 
+      log.includes('Error: insufficient funds')
+    );
+    
+    if (hasInsufficientFunds) {
+      throw new Error('Insufficient USDC balance for this transaction');
+    }
+
+    // Detailed log analysis for specific error patterns
+    for (const log of simulation.value.logs) {
+      if (log.includes('InvalidLockupAmount')) {
+        throw new Error('Invalid staked amount: Should be > 1');
+      }
+      if (log.includes('0x1771') || log.includes('0x178c')) {
+        throw new Error('Maximum slippage reached');
+      }
+      if (log.includes('insufficient funds')) {
+        throw new Error('Insufficient USDC balance for this transaction');
+      }
+      if (
+        log.includes('Program 11111111111111111111111111111111 failed: custom program error: 0x1') ||
+        log.includes('insufficient lamports')
+      ) {
+        throw new Error('You need more SOL to pay for transaction fees');
+      }
+    }
+
+    // Log compilation for debugging
+    const numLogs = simulation.value.logs.length;
+    const lastLogs = simulation.value.logs.slice(Math.max(numLogs - 10, 0));
+    console.log(`Last ${lastLogs.length} Solana simulation logs:`, lastLogs);
+    console.log('base64 encoded transaction:', wireTransaction);
+
+    throw new Error('Transaction simulation error');
+  }
+
+  return Number(simulation.value.unitsConsumed) || DEFAULT_COMPUTE_UNITS;
+}
+```
+
+**Priority Fee Estimation (`compute.ts`):**
+The system dynamically calculates priority fees using QuickNode's RPC to ensure optimal transaction processing:
+
+```typescript
+// Backend: src/solana/transaction/compute.ts
+async function getPriorityFeeEstimate(
+  wireTransaction: string,
+  options: PriorityFeeOptions = {}
+): Promise<number> {
+  try {
+    // Use QuickNode's getRecentPrioritizationFees RPC method
+    const response = await fetch(config.QUICKNODE_RPC_URL!, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getRecentPrioritizationFees',
+        params: [], // Empty array means all recent fees
+      }),
+    });
+
+    const data = await response.json();
+    
+    if (!data || !data.result || !Array.isArray(data.result)) {
+      console.log('No priority fee data returned from QuickNode');
+      return DEFAULT_PRIORITY_FEE;
+    }
+
+    // Calculate median priority fee from recent blocks
+    const fees = data.result
+      .filter((item: any) => item.prioritizationFee !== null && item.prioritizationFee !== undefined)
+      .map((item: any) => item.prioritizationFee);
+
+    if (fees.length === 0) {
+      console.log('No valid priority fees found in recent blocks');
+      return DEFAULT_PRIORITY_FEE;
+    }
+
+    // Calculate the median fee for better stability
+    const sortedFees = fees.sort((a: number, b: number) => a - b);
+    const medianIndex = Math.floor(sortedFees.length / 2);
+    let medianFee = sortedFees[medianIndex];
+
+    // If even number of fees, take average of two middle values
+    if (sortedFees.length % 2 === 0) {
+      medianFee = (sortedFees[medianIndex - 1] + sortedFees[medianIndex]) / 2;
+    }
+
+    // Apply constraints and ensure we return a reasonable fee
+    const constrainedFee = Math.min(Math.max(medianFee, DEFAULT_PRIORITY_FEE), DEFAULT_PRIORITY_FEE * 10);
+    
+    console.log(`Priority fee estimate from QuickNode: ${constrainedFee} microlamports per compute unit`);
+    return constrainedFee;
+  } catch (error) {
+    console.error('Error getting priority fee estimate from QuickNode:', error);
+    return DEFAULT_PRIORITY_FEE;
+  }
+}
+```
+
+**Compute Budget Instructions (`compute.ts`):**
+The system automatically generates compute budget instructions to optimize transaction execution:
+
+```typescript
+// Backend: src/solana/transaction/compute.ts
+export async function getComputeBudget(
+  instructions: Instruction<string>[],
+  feePayer: string,
+  lookupTableAccounts: AddressesByLookupTableAddress,
+  latestBlockhash: Readonly<{
+    blockhash: Blockhash;
+    lastValidBlockHeight: bigint;
+  }>,
+  priorityLevel: PriorityLevel = 'MEDIUM'
+): Promise<Instruction<string>[]> {
+  try {
+    console.log('calling simulateAndGetBudget');
+    const [computeBudgetIx, priorityFeeIx] = await simulateAndGetBudget(
+      instructions,
+      feePayer,
+      lookupTableAccounts,
+      latestBlockhash,
+      priorityLevel
+    );
+
+    return [computeBudgetIx, priorityFeeIx, ...instructions];
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function simulateAndGetBudget(
+  instructions: Instruction<string>[],
+  feePayer: string,
+  lookupTableAccounts: AddressesByLookupTableAddress,
+  latestBlockhash: Readonly<{
+    blockhash: Blockhash;
+    lastValidBlockHeight: bigint;
+  }>,
+  priorityLevel: PriorityLevel
+): Promise<[Instruction<string>, Instruction<string>]> {
+  const payer = address(feePayer);
+  const finalInstructions = [
+    getSetComputeUnitLimitInstruction({
+      units: DEFAULT_COMPUTE_UNITS,
+    }),
+    getSetComputeUnitPriceInstruction({
+      microLamports: DEFAULT_PRIORITY_FEE,
+    }),
+    ...instructions,
+  ];
+  
+  // Build transaction message for simulation
+  const message = pipe(
+    createTransactionMessage({ version: 0 }),
+    (tx) => setTransactionMessageFeePayer(payer, tx),
+    (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
+    (tx) => appendTransactionMessageInstructions(finalInstructions, tx)
+  );
+
+  const messageWithLookupTables = compressTransactionMessageUsingAddressLookupTables(
+    message,
+    lookupTableAccounts
+  );
+
+  const compiledMessage = compileTransaction(messageWithLookupTables);
+  const wireTransaction = getBase64EncodedWireTransaction(compiledMessage);
+  
+  // Get optimized compute units and priority fee
+  const [computeUnits, priorityFee] = await Promise.all([
+    getComputeUnits(wireTransaction),
+    getPriorityFeeEstimate(wireTransaction, {
+      priorityLevel,
+      lookbackSlots: 150,
+      includeVote: false,
+      evaluateEmptySlotAsZero: true,
+    }),
+  ]);
+
+  console.log('computeUnits:', computeUnits);
+
+  // Create optimized compute budget instructions
+  const computeBudgetIx = getSetComputeUnitLimitInstruction({
+    units: Math.ceil(computeUnits * 1.1), // Add 10% buffer
+  });
+
+  const priorityFeeIx = getSetComputeUnitPriceInstruction({
+    microLamports: priorityFee,
+  });
+
+  return [computeBudgetIx, priorityFeeIx];
+}
+```
+
+**Priority Fee Features:**
+- 📊 **Median Calculation**: Uses median fees from recent blocks for stability
+- 🔒 **Safety Constraints**: Applies reasonable fee limits (min/max bounds)
+- ⚡ **QuickNode Integration**: Leverages QuickNode's priority fee data
+- 🎯 **Dynamic Pricing**: Adjusts fees based on network conditions
+
+**Compute Budget Features:**
+- 🧮 **Dynamic Simulation**: Simulates transactions to determine exact compute units needed
+- 💰 **Smart Priority Fees**: Uses QuickNode RPC for accurate fee estimation
+- 🔧 **Instruction Assembly**: Proper instruction ordering with compute budget first
 
 ### 4. Sign Transaction
 **Files:** `frontend/src/components/PaymentButton.tsx`

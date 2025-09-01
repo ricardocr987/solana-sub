@@ -72,7 +72,7 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                 const transactionBytes = base64Encoder.encode(data.transaction);
                 console.log('transactionBytes:', transactionBytes);
                 const { signedTransaction } = await signTransaction({
-                    transaction: transactionBytes as unknown as Uint8Array,
+                    transaction: transactionBytes as Uint8Array,
                 });
                 // Convert signed transaction to base64 for sending to backend
                 const serializedTransaction = bs58.encode(Buffer.from(signedTransaction));
