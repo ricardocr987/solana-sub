@@ -36,6 +36,11 @@ const app = new Elysia()
     }
   })
   .mapResponse(({ response, set }) => {
+    // If response is already a Response object, return it as-is
+    if (response instanceof Response) {
+      return response;
+    }
+
     const isJson = typeof response === 'object'
 
     console.log('🚀 Response:', JSON.stringify(response, null, 2));

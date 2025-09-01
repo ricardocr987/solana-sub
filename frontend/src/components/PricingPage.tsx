@@ -134,7 +134,6 @@ export const PricingPage: React.FC = () => {
               </div>
               <div>
                 <h1 className="text-2xl font-bold">Pricing</h1>
-                <p className="text-gray-400 text-sm">Your plans & billing</p>
               </div>
             </div>
             <ConnectWallet />
@@ -279,25 +278,6 @@ export const PricingPage: React.FC = () => {
             </CardContent>
           </Card>
         </div>
-
-        {/* Debug Info */}
-        {process.env.NODE_ENV === 'development' && (
-          <div className="mt-8 p-4 bg-gray-800 rounded-lg border border-gray-700">
-            <h3 className="text-lg font-semibold text-white mb-2">Debug Info</h3>
-            <pre className="text-xs text-gray-300 overflow-auto">
-              {JSON.stringify({
-                userPlan,
-                isConnected,
-                selectedAccount: selectedAccount?.address,
-                pricingPlans: pricingPlans.map(p => ({
-                  title: p.title,
-                  isActive: p.isActive,
-                  isCurrent: p.isCurrent
-                }))
-              }, null, 2)}
-            </pre>
-          </div>
-        )}
 
         {/* Error Display */}
         {userPlanError && (

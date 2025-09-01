@@ -4,7 +4,8 @@ import { config } from "../config";
 import { BigNumber } from "bignumber.js";
 import { getTokenBalance } from '../solana/getTokenBalance';
 import { transferInstruction } from "../solana/transaction/transferInstruction";
-import { address, compileTransaction, compressTransactionMessageUsingAddressLookupTables, getBase64EncodedWireTransaction, TransactionSigner } from "@solana/kit";
+import { address, TransactionSigner } from "@solana/kit";
+import { getTokenMetadata } from "../solana/getTokenMetadata";
 
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -12,13 +13,7 @@ const subscription = new Elysia({ prefix: '/subscription' })
     .post('/transaction', async ({ body: { account, amount: uiAmount } }) => {
         try {
             const amount = uiAmount.replace(',', '.');
-            const balance = await validateAmount(account, USDC_MINT, amount);
-            if (!balance.isValid) {
-                return Response.json(
-                    { message: balance.message },
-                    { status: 400 }
-                );
-            }
+            await validateAmount(account, USDC_MINT, amount);
 
             const signer: TransactionSigner = {
                 address: address(account),
@@ -62,9 +57,13 @@ const subscription = new Elysia({ prefix: '/subscription' })
             };
         } catch (error) {
             console.error('Error building subscription transaction:', error);
+            
+            // Extract the actual error message from the thrown error
+            const errorMessage = error instanceof Error ? error.message : 'Failed to build subscription transaction';
+            
             return Response.json(
-                { message: 'Failed to build subscription transaction' },
-                { status: 500 }
+                { message: errorMessage },
+                { status: 400 }
             );
         }
     },
@@ -128,49 +127,26 @@ const subscription = new Elysia({ prefix: '/subscription' })
 
 export default subscription;
 
-export type ValidateAmount = {
-  isValid: boolean;
-  message?: string;
-};
-
 export async function validateAmount(
-  account: string,
-  inputToken: string,
-  amount: string
-): Promise<ValidateAmount> {
-  const inputAmount = new BigNumber(amount);
-
-  if (inputAmount.isLessThanOrEqualTo(0)) {
-    return {
-      isValid: false,
-      message: 'Amount must be greater than 0!',
-    };
-  }
-
-  try {
+    account: string,
+    inputToken: string,
+    amount: string
+): Promise<void> {
+    const inputAmount = new BigNumber(amount);
+  
+    if (inputAmount.isLessThanOrEqualTo(0)) 
+      throw new Error('Amount must be greater than 0!');
+    
     const balance = await getTokenBalance(account, inputToken);
-    if (!balance) {
-      return {
-        isValid: false,
-        message: 'Token not found in wallet!',
-      };
-    }
+    if (!balance) throw new Error('Token not found in wallet!');
 
-    const userBalance = new BigNumber(balance.balance);
+    // The balance is returned as a string (UI amount)
+    const userBalance = new BigNumber(balance);
+
     if (inputAmount.isGreaterThan(userBalance)) {
-      return {
-        isValid: false,
-        message: `Insufficient balance! You have ${userBalance.toFixed(4)} USDC`,
-      };
+        const metadata = await getTokenMetadata(inputToken);
+        if (!metadata) throw new Error('Token not found!');
+
+        throw new Error(`Insufficient balance! You have ${userBalance.toFixed(4)} ${metadata.symbol}`);
     }
-
-    return { isValid: true };
-  } catch (error) {
-    console.error('Error validating token amount:', error);
-    return {
-      isValid: false,
-      message: 'Failed to validate token amount',
-    };
-  }
-}
-
+}  

@@ -69,16 +69,26 @@ async function getComputeUnits(
     })
     .send();
 
-  if (simulation.value.err && simulation.value.logs) {
-    if ((simulation.value.err as any).InsufficientFundsForRent) {
-      throw new Error('You need more SOL to pay for transaction fees');
-    }
+    if (simulation.value.err && simulation.value.logs) {
+      if ((simulation.value.err as any).InsufficientFundsForRent) {
+        throw new Error('You need more SOL to pay for transaction fees');
+      }
 
-    if (simulation.value.logs.length === 0) {
-      throw new Error('You need more SOL to pay for transaction fees');
-    }
+      if (simulation.value.logs.length === 0) {
+        throw new Error('You need more SOL to pay for transaction fees');
+      }
 
-    const numLogs = simulation.value.logs.length;
+      // Check for specific insufficient funds error in logs
+      const hasInsufficientFunds = simulation.value.logs.some(log => 
+        log.includes('insufficient funds') || 
+        log.includes('Error: insufficient funds')
+      );
+      
+      if (hasInsufficientFunds) {
+        throw new Error('Insufficient USDC balance for this transaction');
+      }
+
+      const numLogs = simulation.value.logs.length;
     const lastLogs = simulation.value.logs.slice(Math.max(numLogs - 10, 0));
     console.log(`Last ${lastLogs.length} Solana simulation logs:`, lastLogs);
     console.log('base64 encoded transaction:', wireTransaction);
@@ -89,6 +99,12 @@ async function getComputeUnits(
       }
       if (log.includes('0x1771') || log.includes('0x178c')) {
         throw new Error('Maximum slippage reached');
+      }
+      if (log.includes('insufficient funds')) {
+        throw new Error('Insufficient USDC balance for this transaction');
+      }
+      if (log.includes('Error: insufficient funds')) {
+        throw new Error('Insufficient USDC balance for this transaction');
       }
       if (
         log.includes(
