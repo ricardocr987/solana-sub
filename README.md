@@ -21,7 +21,6 @@ Before you begin, ensure you have:
 - **Bun**: https://bun.com/docs/installation
 - A **Solana wallet** with some SOL and USDC as a user
 - The address of the **RECEIVER** in the backend environment requires the USDC token account to be opened.
-- Basic knowledge of **TypeScript** and **React**
 
 ## 🏗️ Architecture
 
@@ -228,22 +227,7 @@ This dual-layer error handling provides:
         transaction,
         amount: parseFloat(amount),
         metadata: {
-            tokenMint: USDC_MINT,
-            tokenSymbol: 'USDC',
-            tokenName: 'USD Coin',
-            tokenDecimals: 6,
-            tokenLogoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
-            receiverAddress: config.RECEIVER,
-            subscriptionPlans: {
-                monthly: {
-                    pro1: { amount: 2, duration: 30 },
-                    pro2: { amount: 10, duration: 30 }
-                },
-                yearly: {
-                    pro1: { amount: 20, duration: 365 },
-                    pro2: { amount: 100, duration: 365 }
-                }
-            }
+          ...
         }
     };
 })
@@ -284,6 +268,11 @@ export async function prepareTransaction(
 
 **Priority Fee Estimation:**
 The system dynamically calculates priority fees using QuickNode's RPC to ensure optimal transaction processing:
+
+- 📊 **Median Calculation**: Uses median fees from recent blocks for stability
+- 🔒 **Safety Constraints**: Applies reasonable fee limits (min/max bounds)
+- ⚡ **QuickNode Integration**: Leverages QuickNode's priority fee data
+- 🎯 **Dynamic Pricing**: Adjusts fees based on network conditions
 
 ```typescript
 // Backend: src/solana/transaction/compute.ts
@@ -346,34 +335,11 @@ async function getPriorityFeeEstimate(
 **Compute Budget Instructions:**
 The system automatically generates compute budget instructions to optimize transaction execution:
 
+- 🧮 **Dynamic Simulation**: Simulates transactions to determine exact compute units needed
+- 💰 **Smart Priority Fees**: Uses QuickNode RPC for accurate fee estimation
+
 ```typescript
 // Backend: src/solana/transaction/compute.ts
-export async function getComputeBudget(
-  instructions: Instruction<string>[],
-  feePayer: string,
-  lookupTableAccounts: AddressesByLookupTableAddress,
-  latestBlockhash: Readonly<{
-    blockhash: Blockhash;
-    lastValidBlockHeight: bigint;
-  }>,
-  priorityLevel: PriorityLevel = 'MEDIUM'
-): Promise<Instruction<string>[]> {
-  try {
-    console.log('calling simulateAndGetBudget');
-    const [computeBudgetIx, priorityFeeIx] = await simulateAndGetBudget(
-      instructions,
-      feePayer,
-      lookupTableAccounts,
-      latestBlockhash,
-      priorityLevel
-    );
-
-    return [computeBudgetIx, priorityFeeIx, ...instructions];
-  } catch (error) {
-    throw error;
-  }
-}
-
 async function simulateAndGetBudget(
   instructions: Instruction<string>[],
   feePayer: string,
@@ -437,17 +403,6 @@ async function simulateAndGetBudget(
 }
 ```
 
-**Priority Fee Features:**
-- 📊 **Median Calculation**: Uses median fees from recent blocks for stability
-- 🔒 **Safety Constraints**: Applies reasonable fee limits (min/max bounds)
-- ⚡ **QuickNode Integration**: Leverages QuickNode's priority fee data
-- 🎯 **Dynamic Pricing**: Adjusts fees based on network conditions
-
-**Compute Budget Features:**
-- 🧮 **Dynamic Simulation**: Simulates transactions to determine exact compute units needed
-- 💰 **Smart Priority Fees**: Uses QuickNode RPC for accurate fee estimation
-- 🔧 **Instruction Assembly**: Proper instruction ordering with compute budget first
-
 ### 4. Sign Transaction
 
 ```typescript
@@ -487,20 +442,6 @@ export function PaymentButton({ account, params }) {
         subscription_duration_days: parseFloat(amount) >= 100 ? 365 : 30
       }]
     });
-
-    // Handle confirmation response
-    if (confirmResponse.error) {
-      throw new Error(confirmResponse.error.value?.message || 'Failed to confirm transaction');
-    }
-
-    const { signatures, transactions } = confirmResponse.data;
-    
-    if (transactions?.[0]?.status === 'confirmed') {
-      // Transaction successful
-      onSuccess(signatures[0]);
-    } else {
-      throw new Error("Transaction confirmation failed");
-    }
   }, [account, params, signTransaction]);
 }
 ```
@@ -514,125 +455,43 @@ The backend confirms transactions with comprehensive payment processing and subs
 .post('/transactions', async ({ body }) => {
   try {
     const { transactions, payments } = body;
-    console.log('Processing transactions:', transactions.length);
-    console.log('Payments:', payments?.length || 0);
-    
-    const results = [];
-    
-    // Process transactions one by one
-    for (let i = 0; i < transactions.length; i++) {
-      const transaction = transactions[i];
-      const payment = payments?.[i];
+    // Process transactions in parallel for better performance
+    const transactionPromises = transactions.map(async (transaction, i) => {      
+      // Send and confirm the transaction using the simplified function
+      const signature = await sendTransaction(transaction);
       
-      try {
-        console.log(`Processing transaction ${i + 1}/${transactions.length}`);
+      if (signature && payment) {
+        // Fetch the confirmed transaction to pass to validateTransaction
+        const confirmedTransaction = await rpc.getTransaction(signature as Signature, {
+          commitment: 'confirmed',
+          encoding: 'jsonParsed',
+          maxSupportedTransactionVersion: 0,
+        }).send();
+
+        if (!confirmedTransaction) {
+          throw new Error('Failed to fetch confirmed transaction');
+        }
+
+        // Check if transaction failed
+        if (confirmedTransaction.meta?.err) {
+          throw new Error(`Transaction failed: ${JSON.stringify(confirmedTransaction.meta.err)}`);
+        }
+
+        // Use validate.ts to handle payment storage and subscription management
+        const validatedSubscription = await validateTransaction(
+          signature,
+          confirmedTransaction
+        );
         
-        // Process transactions in parallel for optimal performance
-        const transactionPromises = transactions.map(async (transaction, i) => {
-          const payment = payments?.[i];
-          
-          try {
-            // Send and confirm the transaction
-            const signature = await sendTransaction(transaction);
-            
-            if (signature && payment) {
-              try {
-                // Fetch the confirmed transaction to pass to validateTransaction
-                const confirmedTransaction = await rpc.getTransaction(signature as Signature, {
-                  commitment: 'confirmed',
-                  encoding: 'jsonParsed',
-                  maxSupportedTransactionVersion: 0,
-                }).send();
-
-                if (!confirmedTransaction) {
-                  throw new Error('Failed to fetch confirmed transaction');
-                }
-
-                // Check if transaction failed
-                if (confirmedTransaction.meta?.err) {
-                  throw new Error(`Transaction failed: ${JSON.stringify(confirmedTransaction.meta.err)}`);
-                }
-
-                // Use validate.ts to handle payment storage and subscription management
-                const validatedSubscription = await validateTransaction(
-                  signature,
-                  confirmedTransaction
-                );
-                
-                console.log(`Payment validated and stored for transaction: ${payment.transaction_hash}`);
-                console.log(`Subscription plan: ${validatedSubscription.planType}`);
-                console.log(`Duration: ${validatedSubscription.subscriptionDurationDays} days`);
-                
-                return {
-                  signature: signature,
-                  status: 'confirmed',
-                  payment: payment,
-                  subscriptionDetails: {
-                    walletAddress: payment.wallet_address,
-                    amountUsdc: payment.amount_usdc,
-                    durationDays: payment.subscription_duration_days || 0,
-                    plan: validatedSubscription.planType
-                  }
-                };
-                
-              } catch (error) {
-                console.error(`Failed to validate transaction ${signature}:`, error);
-                return {
-                  signature: signature,
-                  status: 'confirmed_but_validation_failed',
-                  payment: payment,
-                  error: error instanceof Error ? error.message : 'Validation failed'
-                };
-              }
-            }
-            
-            return {
-              signature: signature || '',
-              status: signature ? 'confirmed' : 'failed',
-              payment: payment || null,
-              subscriptionDetails: payment ? {
-                walletAddress: payment.wallet_address,
-                amountUsdc: payment.amount_usdc,
-                durationDays: payment.subscription_duration_days || 0,
-                plan: 'Subscription Plan'
-              } : null
-            };
-            
-          } catch (error) {
-            console.error(`Error processing transaction ${i}:`, error);
-            return {
-              signature: '',
-              status: 'failed',
-              payment: payment || null,
-              error: error instanceof Error ? error.message : 'Unknown error'
-            };
-          }
-        });
-
-        // Wait for all transactions to complete
-        const results = await Promise.all(transactionPromises);
-        
-        results.push({
-          signature: signature || '',
-          status: signature ? 'confirmed' : 'failed',
-          payment: payment || null,
-          subscriptionDetails: payment ? {
-            walletAddress: payment.wallet_address,
-            amountUsdc: payment.amount_usdc,
-            durationDays: payment.subscription_duration_days || 0,
-            plan: getPlanFromAmount(payment.amount_usdc, payment.subscription_duration_days || 0)
-          } : null
-        });
-      } catch (error) {
-        console.error(`Error processing transaction ${i}:`, error);
-        results.push({
-          signature: '',
-          status: 'failed',
-          payment: payment || null,
-          error: error instanceof Error ? error.message : 'Unknown error'
-        });
+        return {
+          signature,
+          status: 'confirmed',
+        };
       }
-    }
+    });
+
+    // Wait for all transactions to complete
+    const results = await Promise.all(transactionPromises);
 
     return { 
       signatures: results.map(r => r.signature),
@@ -691,9 +550,9 @@ export async function sendTransaction(transaction: string): Promise<string> {
 ```typescript
 // Backend: src/solana/transaction/send.ts
 async function confirmSignature(signature: Signature): Promise<string> {
-  const MAX_RETRIES = 3;
-  const RETRY_INTERVAL = 500; // 500ms between retries
-  const TIMEOUT_DURATION = 8000; // 8 seconds total timeout
+  const MAX_RETRIES = 5;
+  const RETRY_INTERVAL = 1000; // 500ms between retries
+  const TIMEOUT_DURATION = 6000; // 2 seconds total timeout
   
   console.log(`Starting confirmation for signature: ${signature}`);
   
@@ -784,271 +643,77 @@ async function confirmSignature(signature: Signature): Promise<string> {
 }
 ```
 
-**Key Features:**
-- ⚡ **Optimized RPC Settings**: Skip preflight for faster delivery, disable retry queues
-- 🔄 **Retry-Based Confirmation**: 3 attempts with 500ms intervals and 8-second timeout
-- 🧹 **Memory Leak Prevention**: Automatic cleanup of timers and proper error handling
-- 📊 **Comprehensive Payment Processing**: Store payments, update subscriptions, detect plans
-- 🎯 **Plan Detection**: Automatically identify subscription plans from amount and duration
-- 🚫 **Duplicate Resolution Prevention**: Prevents multiple promise resolutions
-- 📝 **Detailed Logging**: Comprehensive transaction processing logs with retry attempts
-- 💾 **Payment Status Management**: Update payment status on failures
-- 🚨 **Proper Error Handling**: Rejects promises with detailed error messages instead of empty strings
-- 🔁 **Smart Retry Logic**: Handles both RPC errors and transaction not found scenarios
-
-**Error Handling Improvements:**
-The refactored confirmation system now provides proper error handling:
-
-1. **Retry Mechanism**: 
-   - 3 attempts with 500ms intervals
-   - Handles both RPC errors and transaction not found scenarios
-   - 8-second overall timeout for safety
-
-2. **Proper Error Propagation**:
-   - Uses `reject()` instead of `resolve('')` for failures
-   - Provides detailed error messages for debugging
-   - Distinguishes between on-chain failures and RPC errors
-
-3. **Transaction Status Handling**:
-   - On-chain failures: `tx.meta?.err` properly detected and reported
-   - RPC errors: Retried up to 3 times before failing
-   - Timeout scenarios: Clear error messages with timing information
-
-4. **Payment Status Updates**:
-   - Failed transactions automatically update payment status to 'failed'
-   - Prevents orphaned payment records
-   - Maintains data consistency
-
 ### 6. Validate & Persist
 
 The system validates transactions, extracts payment details, and automatically determines subscription plans based on payment amounts:
 
+
 ```typescript
-// Backend: src/solana/transaction/validate.ts
-export async function validateTransactionFromSignature(signature: string): Promise<ValidatedSubscription> {
-  try {
-    console.log(`Validating transaction from signature: ${signature}`);
-    
-    // Get transaction details from Solana
-    const parsedTransaction = await rpc.getTransaction(signature as Signature, {
-      commitment: 'confirmed',
-      encoding: 'jsonParsed',
-      maxSupportedTransactionVersion: 0,
-    }).send();
-    
-    if (!parsedTransaction) {
-      throw new Error('Transaction not found or not confirmed');
-    }
-    
-    // Check if transaction failed
-    if (tx.meta?.err) {
-      throw new Error(`Transaction failed: ${JSON.stringify(tx.meta.err)}`);
-    }
-    
-    // Extract fee payer (wallet address)
-    const feePayerIndex = tx.transaction.message.accountKeys.findIndex(
-      (key: any) => key.signer === true
-    );
-    
-    if (feePayerIndex === -1) {
-      throw new Error('No fee payer found in transaction');
-    }
-    
-    const walletAddress = tx.transaction.message.accountKeys[feePayerIndex].pubkey;
-    console.log('Fee payer (wallet address):', walletAddress);
-    
-    // Find and decode transfer instruction (USDC or SOL)
-    const instructions = tx.transaction.message.instructions;
-    let transferInstruction = null;
-    
-    for (const instruction of instructions) {
-      if (instruction.programId === TOKEN_PROGRAM || instruction.programId === SYSTEM_PROGRAM) {
-        transferInstruction = instruction;
-        break;
-      }
-    }
-    
-    if (!transferInstruction) {
-      throw new Error('No transfer instruction found');
-    }
-    
-    // Extract amount and determine subscription duration automatically
-    let amountUsdc = 0;
-    let subscriptionDurationDays = 30; // Default to monthly
-    
-    if (transferInstruction.programId === TOKEN_PROGRAM) {
-      // SPL token transfer (USDC) - decode amount from instruction data
-      try {
-        if ('data' in transferInstruction && transferInstruction.data) {
-          const data = transferInstruction.data;
-          if (data && data.length >= 8) {
-            const dataBytes = getBase64Encoder().encode(data);
-            const decodedData = getTransferInstructionDataDecoder().decode(dataBytes);
-            
-            if (decodedData && decodedData.amount) {
-              amountUsdc = Number(decodedData.amount) / Math.pow(10, 6); // Convert from USDC decimals
-              console.log(`USDC amount: ${amountUsdc}`);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error decoding USDC transfer instruction:', error);
-        throw new Error('Failed to decode USDC transfer instruction');
-      }
-    } else if (transferInstruction.programId === SYSTEM_PROGRAM) {
-      // SOL transfer - decode amount from instruction data
-      try {
-        if ('data' in transferInstruction && transferInstruction.data) {
-          const data = transferInstruction.data;
-          if (data && data.length >= 8) {
-            const dataBytes = getBase64Encoder().encode(data);
-            const decodedData = getTransferSolInstructionDataDecoder().decode(dataBytes);
-            
-            if (decodedData && decodedData.amount) {
-              amountUsdc = Number(decodedData.amount) / Math.pow(10, 9); // Convert from SOL decimals
-              console.log(`SOL amount: ${amountUsdc}`);
-            }
-          }
-        }
-      } catch (error) {
-        console.error('Error decoding SOL transfer instruction:', error);
-        throw new Error('Failed to decode SOL transfer instruction');
-      }
-    }
-    
-    // Automatically determine subscription duration based on payment amount
-    if (amountUsdc >= 100) {
-      subscriptionDurationDays = 365; // Yearly subscription (Pro II)
-    } else if (amountUsdc >= 10) {
-      subscriptionDurationDays = 30;  // Monthly subscription (Pro II)
-    } else if (amountUsdc >= 2) {
-      subscriptionDurationDays = 30;  // Monthly subscription (Pro I)
-    }
-    
-    console.log(`Subscription duration: ${subscriptionDurationDays} days`);
-    
-    // Validate minimum amount
-    if (amountUsdc < 2) {
-      throw new Error(`Amount too low: ${amountUsdc}, minimum required: 2`);
-    }
-    
-    // Validate and store the transaction with subscription data
-    return await validateTransaction(signature, walletAddress, amountUsdc, subscriptionDurationDays);
-    
-  } catch (error) {
-    console.error('Error validating transaction from signature:', error);
-    throw error;
+// Key validation functions and logic
+export async function validateTransaction(
+  signature: string,
+  confirmedTransaction: any
+): Promise<ValidatedSubscription> {
+  // Check for duplicate payments
+  const existingPayment = await getPaymentByTransactionHash(signature);
+  if (existingPayment) {
+    throw new Error('Payment already processed');
   }
+
+  // Extract payment details from transaction metadata
+  const paymentDetails = extractPaymentDetailsFromMeta(confirmedTransaction, signature);
+  if (!paymentDetails) {
+    throw new Error('Failed to extract payment details from transaction');
+  }
+
+  // Validate minimum amount (2 USDC)
+  if (paymentDetails.amountUsdc < 2) {
+    throw new Error(`Amount too low: ${paymentDetails.amountUsdc}, minimum required: 2`);
+  }
+
+  // Auto-determine subscription duration based on amount
+  let subscriptionDurationDays = 30; // Default monthly
+  
+  if (paymentDetails.amountUsdc >= 100) {
+    subscriptionDurationDays = 365; // Yearly subscription
+  } else if (paymentDetails.amountUsdc >= 10) {
+    subscriptionDurationDays = 30; // Monthly Pro II
+  } else if (paymentDetails.amountUsdc >= 2) {
+    subscriptionDurationDays = 30; // Monthly Pro I
+  }
+
+  // Determine plan type automatically
+  const planType = getPlanTypeFromAmount(paymentDetails.amountUsdc, subscriptionDurationDays);
+
+  // Store payment and update subscription
+  const success = await addPayment({
+    transaction_hash: signature,
+    wallet_address: paymentDetails.walletAddress,
+    amount_usdc: paymentDetails.amountUsdc,
+    payment_date: new Date(),
+    subscription_duration_days: subscriptionDurationDays,
+    status: 'confirmed'
+  });
+
+  // Update subscription end date
+  const subscriptionEndDate = new Date();
+  subscriptionEndDate.setDate(subscriptionEndDate.getDate() + subscriptionDurationDays);
+  
+  await upsertSubscription(paymentDetails.walletAddress, subscriptionEndDate);
+
+  return { /* subscription details */ };
 }
 ```
 
-**Key Features:**
-- 🔍 **Meta-Based Validation**: Uses transaction meta data instead of complex instruction parsing
-- 💰 **Automatic Payment Detection**: Extracts USDC amounts from balance changes
-- 📅 **Smart Duration Detection**: Determines subscription length based on payment amount
-- 🚫 **Duplicate Prevention**: Checks for existing payments before processing
-- 💾 **Database Storage**: Stores payment records with subscription metadata
-- 🔐 **Security**: Validates transaction signatures and meta data
-- 📊 **USDC-Focused**: Specifically designed for USDC subscription payments
-- 📋 **Plan Type Detection**: Automatically identifies subscription plan types
-- 🔄 **Subscription Management**: Updates subscription end dates in database
-- 🎯 **Integrated Workflow**: Seamlessly works with confirm.ts for complete payment processing
-- 🏗️ **Separation of Concerns**: validate.ts handles all database operations, confirm.ts focuses on transaction confirmation
-- ⚡ **Simplified Architecture**: Eliminates complex instruction decoding for better performance
+**Automatic Plan Detection:**
 
+The system automatically determines subscription plans based on payment amounts:
 
-**Integration with confirm.ts:**
-The refactored system now follows a clean separation of concerns with parallel processing for optimal performance:
+- **$2 USDC** → Monthly Pro I (30 days)
+- **$10 USDC** → Monthly Pro II (30 days)  
+- **$20 USDC** → Yearly Pro I (365 days)
+- **$100 USDC** → Yearly Pro II (365 days)
 
-```typescript
-// Backend: src/api/confirm.ts
-// Process transactions in parallel for better performance
-const transactionPromises = transactions.map(async (transaction, i) => {
-  const payment = payments?.[i];
-  
-  try {
-    console.log(`Processing transaction ${i + 1}/${transactions.length}`);
-    
-    // Send and confirm the transaction
-    const signature = await sendTransaction(transaction);
-    
-    if (signature && payment) {
-      try {
-        // Fetch the confirmed transaction to pass to validateTransaction
-        const confirmedTransaction = await rpc.getTransaction(signature as Signature, {
-          commitment: 'confirmed',
-          encoding: 'jsonParsed',
-          maxSupportedTransactionVersion: 0,
-        }).send();
-
-        if (!confirmedTransaction) {
-          throw new Error('Failed to fetch confirmed transaction');
-        }
-
-        // Check if transaction failed
-        if (confirmedTransaction.meta?.err) {
-          throw new Error(`Transaction failed: ${JSON.stringify(confirmedTransaction.meta.err)}`);
-        }
-
-        // Use validate.ts to handle payment storage and subscription management
-        const validatedSubscription = await validateTransaction(
-          signature,
-          confirmedTransaction
-        );
-        
-        console.log(`Payment validated and stored for transaction: ${payment.transaction_hash}`);
-        console.log(`Subscription plan: ${validatedSubscription.planType}`);
-        console.log(`Duration: ${validatedSubscription.subscriptionDurationDays} days`);
-        
-        return {
-          signature: signature,
-          status: 'confirmed',
-          payment: payment,
-          subscriptionDetails: {
-            walletAddress: payment.wallet_address,
-            amountUsdc: payment.amount_usdc,
-            durationDays: payment.subscription_duration_days || 0,
-            plan: validatedSubscription.planType
-          }
-        };
-        
-      } catch (error) {
-        console.error(`Failed to validate transaction ${signature}:`, error);
-        return {
-          signature: signature,
-          status: 'confirmed_but_validation_failed',
-          payment: payment,
-          error: error instanceof Error ? error.message : 'Validation failed'
-        };
-      }
-    }
-    
-    return {
-      signature: signature || '',
-      status: signature ? 'confirmed' : 'failed',
-      payment: payment || null,
-      subscriptionDetails: payment ? {
-        walletAddress: payment.wallet_address,
-        amountUsdc: payment.amount_usdc,
-        durationDays: payment.subscription_duration_days || 0,
-        plan: 'Subscription Plan'
-      } : null
-    };
-    
-  } catch (error) {
-    console.error(`Error processing transaction ${i}:`, error);
-    return {
-      signature: '',
-      status: 'failed',
-      payment: payment || null,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    };
-  }
-});
-
-// Wait for all transactions to complete
-const results = await Promise.all(transactionPromises);
-```
 **Database Schema:**
 ```sql
 -- Payments table with subscription data
@@ -1072,25 +737,6 @@ CREATE TABLE subscriptions (
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 ```
-
-**Key Database Features:**
-- 🔒 **Unique Constraints**: Prevents duplicate transaction processing
-- 📊 **Subscription Tracking**: Maintains active subscription end dates
-- 🕒 **Timestamps**: Tracks creation and update times
-- 🔄 **Status Management**: Tracks payment confirmation status
-
-**Key Features:**
-- 🔍 **Transaction Validation**: Decodes and validates Solana transactions
-- 💰 **Amount Extraction**: Automatically extracts payment amounts from USDC/SOL transfers
-- 📅 **Smart Duration Detection**: Determines subscription length based on payment amount
-- 🚫 **Duplicate Prevention**: Checks for existing payments before processing
-- 💾 **Database Storage**: Stores payment records with subscription metadata
-- 🔐 **Security**: Validates transaction signatures and instruction types
-- 📊 **Flexible Support**: Handles both USDC and SOL transfer instructions
-- 📋 **Plan Type Detection**: Automatically identifies subscription plan types
-- 🔄 **Subscription Management**: Updates subscription end dates in database
-- 🎯 **Integrated Workflow**: Seamlessly works with confirm.ts for complete payment processing
-- 🏗️ **Separation of Concerns**: validate.ts handles all database operations, confirm.ts focuses on transaction confirmation
 
 ## 🚀 Quick Start
 
@@ -1167,46 +813,13 @@ bun run build
 # Deploy dist/ folder to your hosting provider
 ```
 
-## 📚 Technical Implementation Details
-
-### Transaction Processing Pipeline
-
-**1. Pre-Validation:**
-- Balance checking before transaction building
-- User authentication verification
-- Input validation and sanitization
-
-**2. Transaction Construction:**
-- USDC transfer instruction creation
-- Transaction simulation
-- Compute budget optimization
-- Priority fee estimation
-- Transaction message compilation
-
-**3. Client-Side Signing:**
-- Transaction encoding and transmission
-- Wallet signature collection
-- Error handling
-
-**4. Backend Confirmation:**
-- Confirmation monitoring with retry logic
-- Payment validation and storage
-
 ## 📈 Performance Considerations
 
 ### Backend Optimization
 
-- **Database Indexing**: Proper indexing for fast queries
 - **Caching**: Strategic caching for frequently accessed data
 - **Parallel Processing**: Concurrent transaction confirmation
 
-### Frontend Optimization
-
-- **Code Splitting**: Lazy loading of components
-- **Memoization**: Strategic use of React.memo and useMemo
-- **Bundle Optimization**: Efficient bundling with Bun
-
-## 🚀 Next Steps
 
 ### Enhancements
 
