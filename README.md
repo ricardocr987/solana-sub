@@ -88,6 +88,10 @@ export function ConnectWallet() {
 When a user initiates a payment, the frontend requests a transaction from the backend.
 The frontend uses Eden Treaty for type-safe API communication:
 
+**Eden Benefits:**
+- 🎯 **Auto-completion**: IDE support for all endpoints
+- ✅ **Type Safety**: Compile-time error checking
+
 ```typescript
 // Frontend: src/lib/api.ts
 import { treaty } from '@elysiajs/eden';
@@ -104,13 +108,43 @@ const { data, error } = await api.subscription.transaction.post({
 });
 ```
 
-**Eden Benefits:**
-- 🎯 **Auto-completion**: IDE support for all endpoints
-- ✅ **Type Safety**: Compile-time error checking
-
 ### 3. Build Transaction
 
-**Error Handling with beforeHandle:**
+This is the entrypoint of the server to get the subscription transaction:
+
+```typescript
+// Backend: src/api/subscription.ts
+.post('/transaction', async ({ body: { account, amount: uiAmount } }) => {
+    const amount = uiAmount.replace(',', '.');
+    const signer: TransactionSigner = {
+        address: address(account),
+        signTransactions: () => Promise.resolve([]),
+    };
+    
+    // Create USDC transfer instruction
+    const paymentInstruction = await transferInstruction(
+        signer,
+        BigInt(amount) * BigInt(10 ** 6), // Convert to USDC decimals
+        address(USDC_MINT),
+        address(config.RECEIVER)
+    );
+
+    // Prepare transaction using Solana Kit - return the encoded transaction
+    const transaction = await prepareTransaction(
+        [paymentInstruction],
+        account,
+    );
+
+    return { 
+        transaction,
+        amount: parseFloat(amount),
+        metadata: {
+          ...
+        }
+    };
+})
+```
+
 The system uses Elysia's `beforeHandle` to validate user balance before building transactions:
 
 ```typescript
@@ -137,8 +171,39 @@ The system uses Elysia's `beforeHandle` to validate user balance before building
 }
 ```
 
-**Transaction Simulation Error Handling:**
-While balance validation happens early, the system also handles transaction simulation errors during compute budget optimization:
+When we get the instruction, the transaction is prepared:
+
+```typescript
+// Backend: src/solana/prepare
+export async function prepareTransaction(
+  instructions: Instruction<string>[],
+  feePayer: string,
+): Promise<string> {
+  // First, the system grabs the latest blockhash from the Solana network.
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
+
+  // Next, we calculate the compute budget from transaction simulation and Quicknode endpoint
+  const finalInstructions = await getComputeBudget(
+    instructions,
+    feePayer,
+    {},
+    latestBlockhash
+  );
+
+  // Finally, everything gets assembled into a proper transaction message and base64 encoded for the response
+  const payer = address(feePayer);
+  const message = pipe(
+    createTransactionMessage({ version: 0 }),
+    tx => setTransactionMessageFeePayer(payer, tx),
+    tx => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
+    tx => appendTransactionMessageInstructions(finalInstructions, tx),
+  );
+  const compiledMessage = compileTransaction(message);
+  return getBase64EncodedWireTransaction(compiledMessage).toString();
+}
+```
+
+While balance validation happens early, the system also handles transaction simulation errors during compute budget preparation:
 
 ```typescript
 // Backend: src/solana/transaction/compute.ts
@@ -149,12 +214,6 @@ async function getComputeUnits(wireTransaction: Base64EncodedWireTransaction): P
   }).send();
 
   if (simulation.value.err && simulation.value.logs) {
-    // Handle specific Solana error types
-    if ((simulation.value.err as any).InsufficientFundsForRent) {
-      throw new Error('You need more SOL to pay for transaction fees');
-    }
-
-    // Check for insufficient funds in transaction logs
     const hasInsufficientFunds = simulation.value.logs.some(log => 
       log.includes('insufficient funds') || 
       log.includes('Error: insufficient funds')
@@ -166,9 +225,6 @@ async function getComputeUnits(wireTransaction: Base64EncodedWireTransaction): P
 
     // Handle other specific Solana program errors
     for (const log of simulation.value.logs) {
-      if (log.includes('InvalidLockupAmount')) {
-        throw new Error('Invalid staked amount: Should be > 1');
-      }
       if (log.includes('0x1771') || log.includes('0x178c')) {
         throw new Error('Maximum slippage reached');
       }
@@ -199,92 +255,18 @@ This dual-layer error handling provides:
 - 📊 **Detailed Logging**: Comprehensive error information for debugging
 - 🎯 **User-Friendly Messages**: Clear explanations for different types of failures
 
-```typescript
-// Backend: src/api/subscription.ts
-.post('/transaction', async ({ body: { account, amount: uiAmount } }) => {
-    const amount = uiAmount.replace(',', '.');
-    const signer: TransactionSigner = {
-        address: address(account),
-        signTransactions: () => Promise.resolve([]),
-    };
-    
-    // Create USDC transfer instruction
-    const paymentInstruction = await transferInstruction(
-        signer,
-        BigInt(amount) * BigInt(10 ** 6), // Convert to USDC decimals
-        address(USDC_MINT),
-        address(config.RECEIVER)
-    );
 
-    // Prepare transaction using Solana Kit - return the raw transaction message
-    const transaction = await prepareTransaction(
-        [paymentInstruction],
-        account,
-    );
-
-    // Return the raw transaction message for the frontend to sign
-    return { 
-        transaction,
-        amount: parseFloat(amount),
-        metadata: {
-          ...
-        }
-    };
-})
-```
-
-**Transaction Preparation Pipeline:**
-```typescript
-// Backend: src/solana/transaction/prepare.ts
-export async function prepareTransaction(
-  instructions: Instruction<string>[],
-  feePayer: string,
-): Promise<string> {
-  // 1. Get latest blockhash for transaction lifetime
-  const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
-  
-  // 2. Optimize compute budget and priority fees
-  const finalInstructions = await getComputeBudget(
-    instructions,
-    feePayer,
-    {},
-    latestBlockhash
-  );
-  
-  // 3. Build transaction message with optimized settings
-  const payer = address(feePayer);
-  const message = pipe(
-    createTransactionMessage({ version: 0 }),
-    tx => setTransactionMessageFeePayer(payer, tx),
-    tx => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
-    tx => appendTransactionMessageInstructions(finalInstructions, tx),
-  );
-  
-  // 4. Compile and encode for transmission
-  const compiledMessage = compileTransaction(message);
-  return getBase64EncodedWireTransaction(compiledMessage).toString();
-}
-```
-
-**Priority Fee Estimation:**
-The system dynamically calculates priority fees using QuickNode's RPC to ensure optimal transaction processing:
-
-- 📊 **Median Calculation**: Uses median fees from recent blocks for stability
-- 🔒 **Safety Constraints**: Applies reasonable fee limits (min/max bounds)
-- ⚡ **QuickNode Integration**: Leverages QuickNode's priority fee data
-- 🎯 **Dynamic Pricing**: Adjusts fees based on network conditions
+QuickNode API is used to get a priority fee estimate:
 
 ```typescript
-// Backend: src/solana/transaction/compute.ts
-async function getPriorityFeeEstimate(
-  wireTransaction: string,
-  options: PriorityFeeOptions = {}
-): Promise<number> {
+async function getPriorityFeeEstimate(): Promise<number> {
   try {
     // Use QuickNode's getRecentPrioritizationFees RPC method
     const response = await fetch(config.QUICKNODE_RPC_URL!, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
@@ -294,13 +276,13 @@ async function getPriorityFeeEstimate(
     });
 
     const data = await response.json();
-    
+
     if (!data || !data.result || !Array.isArray(data.result)) {
       console.log('No priority fee data returned from QuickNode');
       return DEFAULT_PRIORITY_FEE;
     }
 
-    // Calculate median priority fee from recent blocks
+    // Calculate average priority fee from recent blocks
     const fees = data.result
       .filter((item: any) => item.prioritizationFee !== null && item.prioritizationFee !== undefined)
       .map((item: any) => item.prioritizationFee);
@@ -328,78 +310,6 @@ async function getPriorityFeeEstimate(
   } catch (error) {
     console.error('Error getting priority fee estimate from QuickNode:', error);
     return DEFAULT_PRIORITY_FEE;
-  }
-}
-```
-
-**Compute Budget Instructions:**
-The system automatically generates compute budget instructions to optimize transaction execution:
-
-- 🧮 **Dynamic Simulation**: Simulates transactions to determine exact compute units needed
-- 💰 **Smart Priority Fees**: Uses QuickNode RPC for accurate fee estimation
-
-```typescript
-// Backend: src/solana/transaction/compute.ts
-async function simulateAndGetBudget(
-  instructions: Instruction<string>[],
-  feePayer: string,
-  lookupTableAccounts: AddressesByLookupTableAddress,
-  latestBlockhash: Readonly<{
-    blockhash: Blockhash;
-    lastValidBlockHeight: bigint;
-  }>,
-  priorityLevel: PriorityLevel
-): Promise<[Instruction<string>, Instruction<string>]> {
-  const payer = address(feePayer);
-  const finalInstructions = [
-    getSetComputeUnitLimitInstruction({
-      units: DEFAULT_COMPUTE_UNITS,
-    }),
-    getSetComputeUnitPriceInstruction({
-      microLamports: DEFAULT_PRIORITY_FEE,
-    }),
-    ...instructions,
-  ];
-  
-  // Build transaction message for simulation
-  const message = pipe(
-    createTransactionMessage({ version: 0 }),
-    (tx) => setTransactionMessageFeePayer(payer, tx),
-    (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
-    (tx) => appendTransactionMessageInstructions(finalInstructions, tx)
-  );
-
-  const messageWithLookupTables = compressTransactionMessageUsingAddressLookupTables(
-    message,
-    lookupTableAccounts
-  );
-
-  const compiledMessage = compileTransaction(messageWithLookupTables);
-  const wireTransaction = getBase64EncodedWireTransaction(compiledMessage);
-  
-  // Get optimized compute units and priority fee
-  const [computeUnits, priorityFee] = await Promise.all([
-    getComputeUnits(wireTransaction),
-    getPriorityFeeEstimate(wireTransaction, {
-      priorityLevel,
-      lookbackSlots: 150,
-      includeVote: false,
-      evaluateEmptySlotAsZero: true,
-    }),
-  ]);
-
-  console.log('computeUnits:', computeUnits);
-
-  // Create optimized compute budget instructions
-  const computeBudgetIx = getSetComputeUnitLimitInstruction({
-    units: Math.ceil(computeUnits * 1.1), // Add 10% buffer
-  });
-
-  const priorityFeeIx = getSetComputeUnitPriceInstruction({
-    microLamports: priorityFee,
-  });
-
-  return [computeBudgetIx, priorityFeeIx];
 }
 ```
 
