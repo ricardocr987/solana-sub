@@ -30,11 +30,11 @@ Before you begin, ensure you have:
 ┌───────────────────────────┐                ┌───────────────────────────┐
 │    React Frontend         │                │    Elysia Backend         │
 ├───────────────────────────┤                ├───────────────────────────┤
-│ 1. Connect Wallet         │ ── Request ──> │                           │
-│                           │                │ 2. Build Transaction      │
-│ 3. Sign Transaction       │ <── Tx Data ── │                           │
-│                           │                │ 4. Send & Confirm Txn     │
-│                           │ <── Tx Confirm │                           │
+│ 1. Connect Wallet         │                │                           │
+│                           │───Request─────>│ 2. Build Transaction      │
+│ 3. Sign Transaction       │<──Tx to sign───│                           │
+│                           │───Tx signed───>│ 4. Send & Confirm Txn     │
+│                           │<──Tx confirmed─│                           │
 │ 5. Show Result            │                │ 5. Validate & Persist     │
 └───────────────────────────┘                └───────────────────────────┘
 ```
@@ -465,8 +465,7 @@ Rather than waiting passively, the system actively polls the network using `getT
 The confirmation logic includes:
 - **Retry Mechanism**: Up to 5 attempts with 1-second intervals
 - **Timeout Protection**: 6-second overall timeout to prevent hanging
-- **Error Handling**: Distinguishes between network failures and on-chain transaction failures
-- **Status Tracking**: Updates payment status in the database for failed transactions
+- **Error Handling**: Detects on-chain transaction failures and updates payment status accordingly
 
 ```typescript
 // Backend: src/solana/transaction/send.ts
@@ -568,6 +567,11 @@ async function confirmSignature(signature: Signature): Promise<string> {
 
 The system validates transactions, extracts payment details and determines subscription plans based on payment amounts:
 
+- **$2 USDC** → Monthly Pro I (30 days)
+- **$10 USDC** → Monthly Pro II (30 days)  
+- **$20 USDC** → Yearly Pro I (365 days)
+- **$100 USDC** → Yearly Pro II (365 days)
+
 ```typescript
 // Key validation functions and logic
 export async function validateTransaction(
@@ -625,14 +629,6 @@ export async function validateTransaction(
 }
 ```
 
-**Automatic Plan Detection:**
-
-The system automatically determines subscription plans based on payment amounts:
-
-- **$2 USDC** → Monthly Pro I (30 days)
-- **$10 USDC** → Monthly Pro II (30 days)  
-- **$20 USDC** → Yearly Pro I (365 days)
-- **$100 USDC** → Yearly Pro II (365 days)
 
 **Database Schema:**
 ```sql
@@ -700,8 +696,6 @@ bun run dev
 
 Visit `http://localhost:8080` to see your subscription system in action!
 
-## 🛡️ Security Best Practices
-
 ### RPC Key Protection
 
 The system keeps RPC endpoints secure by storing them only in backend environment variables. Frontend code never has access to sensitive RPC credentials.
@@ -736,17 +730,17 @@ bun run build
 
 ### Enhancements
 
-**Performance & Infrastructure**
-1. **WebSocket Confirmation**: Implement `signatureSubscribe` WebSocket for real-time transaction confirmation, reducing client response time
-2. **Webhook Integration**: Add QuickNode webhooks for automated database updates on transaction confirmation
+#### Performance & Infrastructure
+- **WebSocket Confirmation**: Implement `signatureSubscribe` WebSocket for real-time transaction confirmation, reducing client response time
+- **Webhook Integration**: Add QuickNode webhooks for automated database updates on transaction confirmation
 
-**Feature Expansion**
-3. **Multi-Token Support**: Extend beyond USDC to support other SPL tokens (SOL, USDT, etc.)
-4. **Analytics Dashboard**: Build comprehensive transaction analytics and reporting interface
-5. **Mobile Application**: Develop React Native mobile app leveraging the existing backend infrastructure
+#### Feature Expansion  
+- **Multi-Token Support**: Extend beyond USDC to support other SPL tokens (SOL, USDT, etc.)
+- **Analytics Dashboard**: Build comprehensive transaction analytics and reporting interface
+- **Mobile Application**: Develop React Native mobile app leveraging the existing backend infrastructure
 
-**Subscription Management**
-6. **Advanced Features**: Implement recurring payments, plan upgrades/downgrades, and subscription cancellation workflows
+#### Subscription Management
+- **Advanced Features**: Implement recurring payments, plan upgrades/downgrades, and subscription cancellation workflows
 
 ### Learning Resources
 
