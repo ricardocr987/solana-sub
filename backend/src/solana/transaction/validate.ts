@@ -15,7 +15,7 @@ import {
   getTransferInstructionDataDecoder
 } from '@solana-program/token';
 import { getTransferSolInstructionDataDecoder } from '@solana-program/system';
-import { addPayment, getPaymentByTransactionHash } from '../../db';
+import { addPayment, getPaymentByTransactionHash, upsertSubscription } from '../../db';
 import { rpc } from '../rpc';
 
 // Constants
@@ -23,24 +23,25 @@ const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SYSTEM_PROGRAM = '11111111111111111111111111111111';
 const TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 
-interface ValidatedPayment {
+interface ValidatedSubscription {
   signature: string;
   signer: string;
   recipient: string;
-  amount: string;
+  amount: number;
   currency: string;
-  hoursBooked: number;
+  subscriptionDurationDays: number;
+  planType: string;
 }
 
 /**
- * Validate a transaction and store payment details
+ * Validate a transaction and store subscription payment details
  */
 export async function validateTransaction(
   signature: string,
   walletAddress: string,
   amountUsdc: number,
   subscriptionDurationDays: number = 30
-): Promise<ValidatedPayment> {  
+): Promise<ValidatedSubscription> {  
   // Check if payment already exists
   const existingPayment = await getPaymentByTransactionHash(signature);
   if (existingPayment) {
@@ -115,8 +116,8 @@ export async function validateTransaction(
       throw new Error('Invalid amount');
     }
 
-    // Calculate hours from payment amount
-    const hoursBooked = Number(data.amount) / 1_000_000; // Convert from USDC (6 decimals)
+    // Determine subscription plan type
+    const planType = getPlanTypeFromAmount(amountUsdc, subscriptionDurationDays);
 
     // Create payment record
     const paymentDate = new Date();
@@ -133,13 +134,23 @@ export async function validateTransaction(
       throw new Error('Failed to create payment record');
     }
 
+    // Update subscription end date
+    const subscriptionEndDate = new Date(paymentDate);
+    subscriptionEndDate.setDate(subscriptionEndDate.getDate() + subscriptionDurationDays);
+    
+    const subscriptionSuccess = await upsertSubscription(walletAddress, subscriptionEndDate);
+    if (!subscriptionSuccess) {
+      console.warn(`Failed to update subscription for wallet: ${walletAddress}`);
+    }
+
     return {
       signature,
       signer: primarySigner.address.toString(),
       recipient: accounts.destination.address.toString(),
-      amount: data.amount.toString(),
+      amount: amountUsdc,
       currency: accounts.mint.address.toString(),
-      hoursBooked
+      subscriptionDurationDays,
+      planType
     };
   } catch (error) {
     console.error('Error validating transaction:', error);
@@ -148,13 +159,13 @@ export async function validateTransaction(
 }
 
 /**
- * Validate a transaction from signature and extract payment details
+ * Validate a transaction from signature and extract subscription details
  */
-export async function validateTransactionFromSignature(signature: string): Promise<ValidatedPayment> {
+export async function validateTransactionFromSignature(signature: string): Promise<ValidatedSubscription> {
   try {
     console.log(`Validating transaction from signature: ${signature}`);
     
-    // Get transaction details
+    // Get transaction details from Solana
     const parsedTransaction = await rpc.getTransaction(signature as any, {
       commitment: 'confirmed',
       encoding: 'jsonParsed',
@@ -267,11 +278,25 @@ export async function validateTransactionFromSignature(signature: string): Promi
       throw new Error(`Amount too low: ${amountUsdc}, minimum required: 2`);
     }
     
-    // Validate and store the transaction
+    // Validate and store the transaction with subscription data
     return await validateTransaction(signature, walletAddress, amountUsdc, subscriptionDurationDays);
     
   } catch (error) {
     console.error('Error validating transaction from signature:', error);
     throw error;
   }
+}
+
+/**
+ * Helper function to determine subscription plan type from amount and duration
+ */
+function getPlanTypeFromAmount(amount: number, durationDays: number): string {
+  if (durationDays === 30) {
+    if (amount === 2) return 'Monthly Pro I';
+    if (amount === 10) return 'Monthly Pro II';
+  } else if (durationDays === 365) {
+    if (amount === 20) return 'Yearly Pro I';
+    if (amount === 100) return 'Yearly Pro II';
+  }
+  return 'Custom Plan';
 }

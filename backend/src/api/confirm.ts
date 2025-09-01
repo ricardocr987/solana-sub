@@ -1,6 +1,5 @@
 import Elysia, { t } from 'elysia';
-import { addPayment, upsertSubscription } from '../db';
-import { validateTransactionFromSignature } from '../solana/transaction/validate';
+import { validateTransaction } from '../solana/transaction/validate';
 import { sendTransaction } from '../solana/transaction/send';
 
 // Elysia endpoint
@@ -13,24 +12,8 @@ const confirm = new Elysia({ prefix: '/confirm' })
         console.log('Processing transactions:', transactions.length);
         console.log('Payments:', payments?.length || 0);
         
-        // Debug: Log transaction details
-        if (transactions && transactions.length > 0) {
-          console.log('First transaction length:', transactions[0].length);
-          console.log('First transaction preview:', transactions[0].substring(0, 100));
-          console.log('First transaction ends with:', transactions[0].substring(transactions[0].length - 20));
-          
-          // Check for invalid characters
-          const invalidChars = transactions[0].match(/[^A-Za-z0-9+/=]/g);
-          if (invalidChars) {
-            console.warn('Found invalid characters in transaction:', [...new Set(invalidChars)]);
-          }
-        }
-        
-        const results = [];
-        
-        // Process transactions one by one
-        for (let i = 0; i < transactions.length; i++) {
-          const transaction = transactions[i];
+        // Process transactions in parallel for better performance
+        const transactionPromises = transactions.map(async (transaction, i) => {
           const payment = payments?.[i];
           
           try {
@@ -40,54 +23,66 @@ const confirm = new Elysia({ prefix: '/confirm' })
             const signature = await sendTransaction(transaction);
             
             if (signature && payment) {
-              // Store the payment
-              const success = await addPayment({
-                ...payment,
-                payment_date: new Date(payment.payment_date),
-                status: 'confirmed'
-              });
-              
-              if (success) {
-                console.log(`Payment stored for transaction: ${payment.transaction_hash}`);
+              try {
+                // Use validate.ts to handle payment storage and subscription management
+                const validatedSubscription = await validateTransaction(
+                  signature,
+                  payment.wallet_address,
+                  payment.amount_usdc,
+                  payment.subscription_duration_days || 30
+                );
                 
-                // Update subscription if duration specified
-                if (payment.subscription_duration_days) {
-                  const subscriptionEndDate = new Date(payment.payment_date);
-                  subscriptionEndDate.setDate(subscriptionEndDate.getDate() + payment.subscription_duration_days);
-                  
-                  const subscriptionSuccess = await upsertSubscription(payment.wallet_address, subscriptionEndDate);
-                  if (subscriptionSuccess) {
-                    console.log(`Subscription updated for wallet: ${payment.wallet_address}`);
-                  } else {
-                    console.error(`Failed to update subscription for wallet: ${payment.wallet_address}`);
+                console.log(`Payment validated and stored for transaction: ${payment.transaction_hash}`);
+                console.log(`Subscription plan: ${validatedSubscription.planType}`);
+                console.log(`Duration: ${validatedSubscription.subscriptionDurationDays} days`);
+                
+                return {
+                  signature: signature,
+                  status: 'confirmed',
+                  payment: payment,
+                  subscriptionDetails: {
+                    walletAddress: payment.wallet_address,
+                    amountUsdc: payment.amount_usdc,
+                    durationDays: payment.subscription_duration_days || 0,
+                    plan: validatedSubscription.planType
                   }
-                }
-              } else {
-                console.error(`Failed to store payment for transaction: ${payment.transaction_hash}`);
+                };
+                
+              } catch (error) {
+                console.error(`Failed to validate transaction ${signature}:`, error);
+                return {
+                  signature: signature,
+                  status: 'confirmed_but_validation_failed',
+                  payment: payment,
+                  error: error instanceof Error ? error.message : 'Validation failed'
+                };
               }
+            } else {
+              return {
+                signature: signature || '',
+                status: signature ? 'confirmed' : 'failed',
+                payment: payment || null,
+                subscriptionDetails: payment ? {
+                  walletAddress: payment.wallet_address,
+                  amountUsdc: payment.amount_usdc,
+                  durationDays: payment.subscription_duration_days || 0,
+                  plan: 'Subscription Plan'
+                } : null
+              };
             }
-            
-            results.push({
-              signature: signature || '',
-              status: signature ? 'confirmed' : 'failed',
-              payment: payment || null,
-              subscriptionDetails: payment ? {
-                walletAddress: payment.wallet_address,
-                amountUsdc: payment.amount_usdc,
-                durationDays: payment.subscription_duration_days || 0,
-                plan: getPlanFromAmount(payment.amount_usdc, payment.subscription_duration_days || 0)
-              } : null
-            });
           } catch (error) {
             console.error(`Error processing transaction ${i}:`, error);
-            results.push({
+            return {
               signature: '',
               status: 'failed',
               payment: payment || null,
               error: error instanceof Error ? error.message : 'Unknown error'
-            });
+            };
           }
-        }
+        });
+
+        // Wait for all transactions to complete
+        const results = await Promise.all(transactionPromises);
 
         return { 
           signatures: results.map(r => r.signature),
@@ -114,16 +109,6 @@ const confirm = new Elysia({ prefix: '/confirm' })
       }),
     }
   );
-// Helper function to determine subscription plan from amount and duration
-function getPlanFromAmount(amount: number, durationDays: number): string {
-  if (durationDays === 30) {
-    if (amount === 2) return 'Monthly Pro I';
-    if (amount === 10) return 'Monthly Pro II';
-  } else if (durationDays === 365) {
-    if (amount === 20) return 'Yearly Pro I';
-    if (amount === 100) return 'Yearly Pro II';
-  }
-  return 'Custom Plan';
-}
+
 
 export default confirm;

@@ -16,65 +16,97 @@ async function sendRawTransaction(wireTransaction: Base64EncodedWireTransaction)
 }
 
 /**
- * Confirms a transaction signature using polling approach
+ * Confirms a transaction signature using retry-based polling approach
  */
 async function confirmSignature(signature: Signature): Promise<string> {
-  const TIMEOUT_DURATION = 8000; // 8 seconds timeout
+  const MAX_RETRIES = 3;
+  const RETRY_INTERVAL = 500; // 500ms between retries
+  const TIMEOUT_DURATION = 2000; // 2 seconds total timeout
+  
   console.log(`Starting confirmation for signature: ${signature}`);
   
-  return new Promise<string>((resolve) => {
+  return new Promise<string>((resolve, reject) => {
     let timeoutId: NodeJS.Timeout;
-    let intervalId: NodeJS.Timeout;
-    let isResolved = false; // Prevent multiple resolutions
+    let retryCount = 0;
+    let isResolved = false;
     
-    // Cleanup function to clear all timers
+    // Cleanup function to clear timers
     const cleanup = () => {
       if (timeoutId) clearTimeout(timeoutId);
-      if (intervalId) clearInterval(intervalId);
     };
     
-    // Simple polling approach for confirmation
+    // Check transaction confirmation with retry logic
     const checkConfirmation = async () => {
-      // Don't check if already resolved
       if (isResolved) return;
       
       try {
+        console.log(`Checking confirmation for ${signature} (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+        
         const tx = await rpc.getTransaction(signature, {
           commitment: 'confirmed',
           encoding: 'jsonParsed',
           maxSupportedTransactionVersion: 0,
         }).send();
         
-        if (tx && !tx.meta?.err) {
-          console.log(`Transaction confirmed for ${signature}`);
-          isResolved = true;
-          cleanup();
-          resolve(signature);
-        } else if (tx?.meta?.err) {
-          console.error(`Transaction failed for ${signature}:`, tx.meta.err);
-          isResolved = true;
-          cleanup();
-          resolve('');
+        if (tx) {
+          if (tx.meta?.err) {
+            // Transaction failed on-chain
+            const errorMessage = `Transaction failed on-chain: ${JSON.stringify(tx.meta.err)}`;
+            console.error(`Transaction failed for ${signature}:`, tx.meta.err);
+            isResolved = true;
+            cleanup();
+            reject(new Error(errorMessage));
+          } else {
+            // Transaction confirmed successfully
+            console.log(`Transaction confirmed for ${signature}`);
+            isResolved = true;
+            cleanup();
+            resolve(signature);
+          }
+        } else {
+          // Transaction not found yet
+          retryCount++;
+          
+          if (retryCount >= MAX_RETRIES) {
+            const errorMessage = `Transaction not found after ${MAX_RETRIES} attempts: ${signature}`;
+            console.error(errorMessage);
+            isResolved = true;
+            cleanup();
+            reject(new Error(errorMessage));
+          } else {
+            // Schedule next retry
+            setTimeout(checkConfirmation, RETRY_INTERVAL);
+          }
         }
       } catch (error) {
-        // Transaction not found yet, continue polling
-        console.log(`Transaction ${signature} not yet confirmed, continuing...`);
+        // RPC error occurred
+        retryCount++;
+        
+        if (retryCount >= MAX_RETRIES) {
+          const errorMessage = `Failed to confirm transaction after ${MAX_RETRIES} attempts: ${error instanceof Error ? error.message : 'Unknown error'}`;
+          console.error(errorMessage);
+          isResolved = true;
+          cleanup();
+          reject(new Error(errorMessage));
+        } else {
+          // Schedule next retry
+          setTimeout(checkConfirmation, RETRY_INTERVAL);
+        }
       }
     };
     
-    // Check every 500ms
-    intervalId = setInterval(checkConfirmation, 500);
-    
+    // Set overall timeout
     timeoutId = setTimeout(() => {
       if (!isResolved) {
-        console.log(`Timeout reached for signature ${signature} after ${TIMEOUT_DURATION}ms`);
+        const errorMessage = `Transaction confirmation timeout after ${TIMEOUT_DURATION}ms: ${signature}`;
+        console.error(errorMessage);
         isResolved = true;
         cleanup();
-        resolve('');
+        reject(new Error(errorMessage));
       }
     }, TIMEOUT_DURATION);
     
-    // Initial check
+    // Start the first check
     checkConfirmation();
   });
 }
@@ -87,8 +119,22 @@ export async function sendTransaction(transaction: string): Promise<string> {
     const signature = await sendRawTransaction(transaction as Base64EncodedWireTransaction);
     console.log(`Transaction sent with signature: ${signature}`);
 
-    // Confirm the transaction
-    return await confirmSignature(signature as Signature);
+    // Confirm the transaction with proper error handling
+    try {
+      return await confirmSignature(signature as Signature);
+    } catch (confirmationError) {
+      console.error(`Transaction confirmation failed for ${signature}:`, confirmationError);
+      
+      // Update payment status to failed
+      await updatePaymentStatus(signature, 'failed');
+      
+      // Re-throw the confirmation error with more context
+      throw new Error(
+        confirmationError instanceof Error 
+          ? `Confirmation failed: ${confirmationError.message}`
+          : 'Transaction confirmation failed'
+      );
+    }
   } catch (error) {
     console.error('Transaction failed:', error);
     
