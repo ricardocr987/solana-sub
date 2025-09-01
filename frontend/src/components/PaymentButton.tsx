@@ -56,11 +56,6 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                     throw new Error('No data received from server');
                 }
 
-                // Type guard to ensure we have the expected data structure
-                if (!('transaction' in data)) {
-                    throw new Error('Invalid response format from server');
-                }
-
                 console.log("Received transaction data from backend:", data);
 
                 // Step 2: Sign the transaction
@@ -68,9 +63,7 @@ export function PaymentButton({ account, params }: { account: UiWalletAccount, p
                 console.log('Signing transaction...');
                 
                 const base64Encoder = getBase64Encoder();
-                console.log('data.transaction:', data.transaction);
                 const transactionBytes = base64Encoder.encode(data.transaction);
-                console.log('transactionBytes:', transactionBytes);
                 const { signedTransaction } = await signTransaction({
                     transaction: transactionBytes as Uint8Array,
                 });

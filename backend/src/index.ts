@@ -35,8 +35,14 @@ const app = new Elysia()
       }
     }
   })
+  .onError(({ code, error }) => {
+    console.error('🚨 Error:', error);
+    return {
+      message: error instanceof Error ? error.message : 'Internal server error',
+      status: 500,
+    };
+  })
   .mapResponse(({ response, set }) => {
-    // If response is already a Response object, return it as-is
     if (response instanceof Response) {
       return response;
     }

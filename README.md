@@ -5,7 +5,7 @@
 
 ## 🎯 Overview
 
-This project demonstrates how to build a secure subscription service that handles USDC payments on Solana. It features a three-phase transaction flow that keeps RPC keys secure while providing full user control over transactions.
+This project demonstrates how to build a secure subscription service that handles USDC payments on Solana.
 
 **Key Features:**
 - 🔐 **Secure Transaction Flow**: Build transactions on server, sign on client
@@ -20,7 +20,7 @@ Before you begin, ensure you have:
 
 - **Bun**: https://bun.com/docs/installation
 - A **Solana wallet** with some SOL and USDC as a user
-- The address of the **RECEIVER** in the backend environment requires the USDC token account to be opened, so send some USDC there.
+- The address of the **RECEIVER** in the backend environment requires the USDC token account to be opened.
 - Basic knowledge of **TypeScript** and **React**
 
 ## 🏗️ Architecture
@@ -43,7 +43,6 @@ Before you begin, ensure you have:
 ## 🔄 Complete Transaction Flow
 
 ### 1. Connect Wallet
-**Files:** `frontend/src/components/ConnectWallet.tsx`, `frontend/src/context/WalletContext.tsx`
 
 ```typescript
 // Frontend: src/components/ConnectWallet.tsx
@@ -84,7 +83,6 @@ export function ConnectWallet() {
 ```
 
 ### 2. Request Transaction (Type-Safe Client)
-**Files:** `frontend/src/components/PaymentButton.tsx`, `frontend/src/lib/api.ts`
 
 The frontend uses Eden Treaty for type-safe API communication:
 
@@ -112,42 +110,152 @@ const { data, error } = await api.subscription.transaction.post({
 **Files:** `backend/src/api/subscription.ts`, `backend/src/solana/transaction/prepare.ts`, `backend/src/solana/transaction/compute.ts`, `backend/src/solana/transaction/transferInstruction.ts`
 
 **Key Features:**
-- 🔍 **Validation**: Check USDC balance before transaction building and logs on the simulation
+- 🔍 **Validation**: Check USDC balance before transaction building using `beforeHandle`
 - 📊 **Metadata Enrichment**: Include metadata information about plans and the transaction
 - 💸 **Priority Fee**: Dynamic priority fee estimation using Quicknode
+- 🚫 **Early Validation**: Prevent transaction building if user has insufficient balance
+
+**Error Handling with beforeHandle:**
+The system uses Elysia's `beforeHandle` to validate user balance before building transactions:
+
+```typescript
+// Backend: src/api/subscription.ts
+{
+    beforeHandle: async ({ body: { account, amount: uiAmount } }) => {
+        try {
+            const amount = uiAmount.replace(',', '.');
+            await validateAmount(account, USDC_MINT, amount);
+        } catch (error) {
+            // Extract the actual error message from the thrown error
+            const errorMessage = error instanceof Error ? error.message : 'Failed to build subscription transaction';
+            console.error('Error building subscription transaction:', errorMessage);
+            return Response.json(
+                { message: errorMessage },
+                { status: 400 }
+            );
+        }
+    },
+    body: t.Object({
+        account: t.String(),
+        amount: t.String(),
+    }),
+}
+```
+
+This approach provides:
+- ✅ **Early Validation**: Balance is checked before any transaction building
+- 🎯 **Clear Error Messages**: Users get specific feedback about insufficient balance
+- 🚫 **Prevented Wasted Resources**: No transaction building if validation fails
+- 📱 **Frontend-Friendly**: Returns proper HTTP status codes with JSON error messages
+
+**Transaction Simulation Error Handling:**
+While balance validation happens early, the system also handles transaction simulation errors during compute budget optimization:
+
+```typescript
+// Backend: src/solana/transaction/compute.ts
+async function getComputeUnits(wireTransaction: Base64EncodedWireTransaction): Promise<number> {
+  const simulation = await rpc.simulateTransaction(wireTransaction, {
+    sigVerify: false,
+    encoding: 'base64',
+  }).send();
+
+  if (simulation.value.err && simulation.value.logs) {
+    // Handle specific Solana error types
+    if ((simulation.value.err as any).InsufficientFundsForRent) {
+      throw new Error('You need more SOL to pay for transaction fees');
+    }
+
+    // Check for insufficient funds in transaction logs
+    const hasInsufficientFunds = simulation.value.logs.some(log => 
+      log.includes('insufficient funds') || 
+      log.includes('Error: insufficient funds')
+    );
+    
+    if (hasInsufficientFunds) {
+      throw new Error('Insufficient USDC balance for this transaction');
+    }
+
+    // Handle other specific Solana program errors
+    for (const log of simulation.value.logs) {
+      if (log.includes('InvalidLockupAmount')) {
+        throw new Error('Invalid staked amount: Should be > 1');
+      }
+      if (log.includes('0x1771') || log.includes('0x178c')) {
+        throw new Error('Maximum slippage reached');
+      }
+      if (
+        log.includes('Program 11111111111111111111111111111111 failed: custom program error: 0x1') ||
+        log.includes('insufficient lamports')
+      ) {
+        throw new Error('You need more SOL to pay for transaction fees');
+      }
+    }
+
+    // Log compilation for debugging
+    const numLogs = simulation.value.logs.length;
+    const lastLogs = simulation.value.logs.slice(Math.max(numLogs - 10, 0));
+    console.log(`Last ${lastLogs.length} Solana simulation logs:`, lastLogs);
+    console.log('base64 encoded transaction:', wireTransaction);
+
+    throw new Error('Transaction simulation error');
+  }
+
+  return Number(simulation.value.unitsConsumed) || DEFAULT_COMPUTE_UNITS;
+}
+```
+
+This dual-layer error handling provides:
+- 🚫 **Early Prevention**: Balance validation stops invalid requests before transaction building
+- 🔍 **Deep Validation**: Transaction simulation catches Solana-specific errors
+- 📊 **Detailed Logging**: Comprehensive error information for debugging
+- 🎯 **User-Friendly Messages**: Clear explanations for different types of failures
 
 ```typescript
 // Backend: src/api/subscription.ts
 .post('/transaction', async ({ body: { account, amount: uiAmount } }) => {
-    try {
-        // 1. Validate user balance before building transaction
-        await validateAmount(account, USDC_MINT, amount);
-        
-        // 2. Create USDC transfer instruction
-        const paymentInstruction = await transferInstruction(
-            signer,
-            BigInt(amount) * BigInt(10 ** 6), // Convert to USDC decimals
-            address(USDC_MINT),
-            address(config.RECEIVER)
-        );
-        
-        // 3. Prepare transaction with compute budget optimization
-        const transaction = await prepareTransaction(
-            [paymentInstruction],
-            account
-        );
-        
-        return { 
-            transaction,
-            amount: parseFloat(amount),
-            metadata: { /* subscription plans, token info */ }
-        };
-    } catch (error) {
-        return Response.json(
-            { message: 'Failed to build subscription transaction' },
-            { status: 500 }
-        );
-    }
+    const amount = uiAmount.replace(',', '.');
+    const signer: TransactionSigner = {
+        address: address(account),
+        signTransactions: () => Promise.resolve([]),
+    };
+    
+    // Create USDC transfer instruction
+    const paymentInstruction = await transferInstruction(
+        signer,
+        BigInt(amount) * BigInt(10 ** 6), // Convert to USDC decimals
+        address(USDC_MINT),
+        address(config.RECEIVER)
+    );
+
+    // Prepare transaction using Solana Kit - return the raw transaction message
+    const transaction = await prepareTransaction(
+        [paymentInstruction],
+        account,
+    );
+
+    // Return the raw transaction message for the frontend to sign
+    return { 
+        transaction,
+        amount: parseFloat(amount),
+        metadata: {
+            tokenMint: USDC_MINT,
+            tokenSymbol: 'USDC',
+            tokenName: 'USD Coin',
+            tokenDecimals: 6,
+            tokenLogoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+            receiverAddress: config.RECEIVER,
+            subscriptionPlans: {
+                monthly: {
+                    pro1: { amount: 2, duration: 30 },
+                    pro2: { amount: 10, duration: 30 }
+                },
+                yearly: {
+                    pro1: { amount: 20, duration: 365 },
+                    pro2: { amount: 100, duration: 365 }
+                }
+            }
+        }
+    };
 })
 ```
 
@@ -185,58 +293,34 @@ export async function prepareTransaction(
 ```
 
 **Error Handling:**
-The system now provides specific error messages for different failure scenarios:
+The system provides clear error messages for validation failures using a simplified approach:
 
-**Solana Transaction Log Compilation (`compute.ts`):**
+**Token Balance Validation (`subscription.ts`):**
 
 ```typescript
-// Backend: src/solana/transaction/compute.ts
-async function getComputeUnits(wireTransaction: Base64EncodedWireTransaction): Promise<number> {
-  const simulation = await rpc.simulateTransaction(wireTransaction, {
-    sigVerify: false,
-    encoding: 'base64',
-  }).send();
-
-  if (simulation.value.err && simulation.value.logs) {
-    // Early detection of insufficient funds
-    const hasInsufficientFunds = simulation.value.logs.some(log => 
-      log.includes('insufficient funds') || 
-      log.includes('Error: insufficient funds')
-    );
+// Backend: src/api/subscription.ts
+export async function validateAmount(
+    account: string,
+    inputToken: string,
+    amount: string
+): Promise<void> {
+    const inputAmount = new BigNumber(amount);
+  
+    if (inputAmount.isLessThanOrEqualTo(0)) 
+      throw new Error('Amount must be greater than 0!');
     
-    if (hasInsufficientFunds) {
-      throw new Error('Insufficient USDC balance for this transaction');
+    const balance = await getTokenBalance(account, inputToken);
+    if (!balance) throw new Error('Token not found in wallet!');
+
+    // The balance is returned as a string (UI amount)
+    const userBalance = new BigNumber(balance);
+
+    if (inputAmount.isGreaterThan(userBalance)) {
+        const metadata = await getTokenMetadata(inputToken);
+        if (!metadata) throw new Error('Token not found!');
+
+        throw new Error(`Insufficient balance! You have ${userBalance.toFixed(4)} ${metadata.symbol}`);
     }
-
-    // Detailed log analysis for specific error patterns
-    for (const log of simulation.value.logs) {
-      if (log.includes('InvalidLockupAmount')) {
-        throw new Error('Invalid staked amount: Should be > 1');
-      }
-      if (log.includes('0x1771') || log.includes('0x178c')) {
-        throw new Error('Maximum slippage reached');
-      }
-      if (log.includes('insufficient funds')) {
-        throw new Error('Insufficient USDC balance for this transaction');
-      }
-      if (
-        log.includes('Program 11111111111111111111111111111111 failed: custom program error: 0x1') ||
-        log.includes('insufficient lamports')
-      ) {
-        throw new Error('You need more SOL to pay for transaction fees');
-      }
-    }
-
-    // Log compilation for debugging
-    const numLogs = simulation.value.logs.length;
-    const lastLogs = simulation.value.logs.slice(Math.max(numLogs - 10, 0));
-    console.log(`Last ${lastLogs.length} Solana simulation logs:`, lastLogs);
-    console.log('base64 encoded transaction:', wireTransaction);
-
-    throw new Error('Transaction simulation error');
-  }
-
-  return Number(simulation.value.unitsConsumed) || DEFAULT_COMPUTE_UNITS;
 }
 ```
 
@@ -612,7 +696,6 @@ Visit `http://localhost:8080` to see your subscription system in action!
 export const config = {
   QUICKNODE_RPC_URL: process.env.QUICKNODE_RPC_URL || 'https://api.mainnet-beta.solana.com',
   RECEIVER: process.env.RECEIVER || '',
-  WEBHOOK_TOKEN: process.env.WEBHOOK_TOKEN || ''
 };
 ```
 

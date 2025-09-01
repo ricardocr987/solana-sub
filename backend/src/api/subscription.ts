@@ -11,69 +11,68 @@ const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 const subscription = new Elysia({ prefix: '/subscription' })
     .post('/transaction', async ({ body: { account, amount: uiAmount } }) => {
-        try {
-            const amount = uiAmount.replace(',', '.');
-            await validateAmount(account, USDC_MINT, amount);
+        const amount = uiAmount.replace(',', '.');
+        const signer: TransactionSigner = {
+            address: address(account),
+            signTransactions: () => Promise.resolve([]),
+        };
+        const paymentInstruction = await transferInstruction(
+            signer,
+            BigInt(amount) * BigInt(10 ** 6),
+            address(USDC_MINT),
+            address(config.RECEIVER)
+        );
 
-            const signer: TransactionSigner = {
-                address: address(account),
-                signTransactions: () => Promise.resolve([]),
-            };
-            const paymentInstruction = await transferInstruction(
-                signer,
-                BigInt(amount) * BigInt(10 ** 6),
-                address(USDC_MINT),
-                address(config.RECEIVER)
-            );
+        // Prepare transaction using Solana Kit - return the raw transaction message
+        const transaction = await prepareTransaction(
+            [paymentInstruction],
+            account,
+        );
 
-            // Prepare transaction using Solana Kit - return the raw transaction message
-            const transaction = await prepareTransaction(
-                [paymentInstruction],
-                account,
-            );
-
-            // Return the raw transaction message for the frontend to sign
-            return { 
-                transaction,
-                amount: parseFloat(amount),
-                metadata: {
-                    tokenMint: USDC_MINT,
-                    tokenSymbol: 'USDC',
-                    tokenName: 'USD Coin',
-                    tokenDecimals: 6,
-                    tokenLogoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
-                    receiverAddress: config.RECEIVER,
-                    subscriptionPlans: {
-                        monthly: {
-                            pro1: { amount: 2, duration: 30 },
-                            pro2: { amount: 10, duration: 30 }
-                        },
-                        yearly: {
-                            pro1: { amount: 20, duration: 365 },
-                            pro2: { amount: 100, duration: 365 }
-                        }
+        // Return the raw transaction message for the frontend to sign
+        return { 
+            transaction,
+            amount: parseFloat(amount),
+            metadata: {
+                tokenMint: USDC_MINT,
+                tokenSymbol: 'USDC',
+                tokenName: 'USD Coin',
+                tokenDecimals: 6,
+                tokenLogoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+                receiverAddress: config.RECEIVER,
+                subscriptionPlans: {
+                    monthly: {
+                        pro1: { amount: 2, duration: 30 },
+                        pro2: { amount: 10, duration: 30 }
+                    },
+                    yearly: {
+                        pro1: { amount: 20, duration: 365 },
+                        pro2: { amount: 100, duration: 365 }
                     }
                 }
-            };
-        } catch (error) {
-            console.error('Error building subscription transaction:', error);
-            
-            // Extract the actual error message from the thrown error
-            const errorMessage = error instanceof Error ? error.message : 'Failed to build subscription transaction';
-            
-            return Response.json(
-                { message: errorMessage },
-                { status: 400 }
-            );
-        }
+            }
+        };
     },
     {
+        beforeHandle: async ({ body: { account, amount: uiAmount } }) => {
+            try {
+                const amount = uiAmount.replace(',', '.');
+                await validateAmount(account, USDC_MINT, amount);
+            } catch (error) {
+                // Extract the actual error message from the thrown error
+                const errorMessage = error instanceof Error ? error.message : 'Failed to build subscription transaction';
+                console.error('Error building subscription transaction:', errorMessage);
+                return Response.json(
+                    { message: errorMessage },
+                    { status: 400 }
+                );
+            }
+        },
         body: t.Object({
             account: t.String(),
             amount: t.String(),
         }),
-    }
-    )
+    })
     /* webhook notifications could be more reliable that storing on confirmation endpoint
     .post('/transactionListener', async ({ body, headers }) => {
         try {

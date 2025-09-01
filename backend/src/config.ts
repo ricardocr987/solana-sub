@@ -1,6 +1,5 @@
 const requiredEnvVariables = [
   'QUICKNODE_RPC_URL',
-  'WEBHOOK_TOKEN',
   'RECEIVER',
 ];
 
@@ -14,6 +13,5 @@ const QUICKNODE_RPC_URL = process.env.QUICKNODE_RPC_URL!;
 
 export const config = {
   QUICKNODE_RPC_URL,
-  WEBHOOK_TOKEN: process.env.WEBHOOK_TOKEN!,
   RECEIVER: process.env.RECEIVER!,
 };
