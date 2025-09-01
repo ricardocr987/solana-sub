@@ -10,7 +10,7 @@ This project demonstrates how to build a secure subscription service that handle
 - 🔐 **Secure Transaction Flow**: Build transactions on server, sign on client
 - 🚀 **Modern Stack**: Elysia + Bun for both frontend and backend
 - 🔗 **Type Safety**: Full-stack type safety with Eden integration
-- 💰 **USDC Payments**: Handle real USDC transactions on Solana mainnet
+- 💰 **USDC Payments**: Handle USDC transactions on Solana
 - 📱 **Wallet Integration**: Seamless wallet connection with @wallet-standard/react
 - 💾 **SQLite Database**: Persistent storage for payments and subscriptions
 
@@ -43,7 +43,7 @@ Before you begin, ensure you have:
 
 ### 1. Wallet Connection
 
-The frontend uses the Wallet Standard API for seamless wallet integration. The `ConnectWallet` component provides a dropdown interface that automatically detects available wallets and handles connection state management.
+The `ConnectWallet` component provides a dropdown interface that automatically detects available wallets and handles connection state management.
 
 ```typescript
 // Frontend: src/components/ConnectWallet.tsx
@@ -278,7 +278,6 @@ async function getPriorityFeeEstimate(): Promise<number> {
     const data = await response.json();
 
     if (!data || !data.result || !Array.isArray(data.result)) {
-      console.log('No priority fee data returned from QuickNode');
       return DEFAULT_PRIORITY_FEE;
     }
 
@@ -288,7 +287,6 @@ async function getPriorityFeeEstimate(): Promise<number> {
       .map((item: any) => item.prioritizationFee);
 
     if (fees.length === 0) {
-      console.log('No valid priority fees found in recent blocks');
       return DEFAULT_PRIORITY_FEE;
     }
 
@@ -305,10 +303,8 @@ async function getPriorityFeeEstimate(): Promise<number> {
     // Apply constraints and ensure we return a reasonable fee
     const constrainedFee = Math.min(Math.max(medianFee, DEFAULT_PRIORITY_FEE), DEFAULT_PRIORITY_FEE * 10);
     
-    console.log(`Priority fee estimate from QuickNode: ${constrainedFee} microlamports per compute unit`);
     return constrainedFee;
   } catch (error) {
-    console.error('Error getting priority fee estimate from QuickNode:', error);
     return DEFAULT_PRIORITY_FEE;
 }
 ```
@@ -358,7 +354,7 @@ export function PaymentButton({ account, params }) {
 
 ### 5. Confirm Transaction
 
-This endpoint handles confirmation of multiple transactions in parallel. After transactions are sent and confirmed on-chain, they undergo validation to verify they represent legitimate user payments to the recipient address. Once validated, payment records and subscription data are persisted to the database
+The confirmation process handles multiple transactions simultaneously, sending them to the network and waiting for on-chain confirmation. Once confirmed, each transaction undergoes validation to ensure it's a legitimate payment, then gets stored in the database with subscription details.
 
 ```typescript
 // Backend: src/api/confirm.ts
@@ -417,9 +413,12 @@ This endpoint handles confirmation of multiple transactions in parallel. After t
 })
 ```
 
-**Transaction Sending and confirmation:**
+**Transaction Sending (`src/solana/transaction/send.ts`)**
 
-[SendTransaction](https://www.quicknode.com/docs/solana/sendTransaction) rpc method is called with the optimal configuration and the base 64 encoded transaction
+The system sends transactions using QuickNode's `sendTransaction` RPC with optimized settings:
+- `skipPreflight: true` for faster delivery
+- `maxRetries: 0n` to disable RPC retry queues  
+- `preflightCommitment: 'confirmed'` for reliable blockhash validation
 
 ```typescript
 // Backend: src/solana/transaction/send.ts
@@ -459,9 +458,15 @@ export async function sendTransaction(transaction: string): Promise<string> {
 }
 ```
 
-**Confirmation with Error Handling:**
+**Confirmation Strategy**
 
-The backend confirms transactions by polling the transaction with [getTransaction](https://www.quicknode.com/docs/solana/getTransaction) RPC method. A better approach would be to use the [signatureSubscribe](https://www.quicknode.com/docs/solana/signatureSubscribe) WebSocket method:
+Rather than waiting passively, the system actively polls the network using `getTransaction` RPC calls. While this approach works reliably, it could be optimized using QuickNode's `signatureSubscribe` WebSocket method for real-time notifications.
+
+The confirmation logic includes:
+- **Retry Mechanism**: Up to 5 attempts with 1-second intervals
+- **Timeout Protection**: 6-second overall timeout to prevent hanging
+- **Error Handling**: Distinguishes between network failures and on-chain transaction failures
+- **Status Tracking**: Updates payment status in the database for failed transactions
 
 ```typescript
 // Backend: src/solana/transaction/send.ts
@@ -731,11 +736,17 @@ bun run build
 
 ### Enhancements
 
-1. **Webhook Integration**: Add Quicknode webhooks for real-time transaction confirmation
-2. **Multi-Token Support**: Extend beyond USDC to other SPL tokens
-3. **Analytics Dashboard**: Implement transaction analytics and reporting
-4. **Mobile App**: Build React Native version using the same backend
-5. **Advanced Subscription Features**: Recurring payments, plan upgrades, cancellations
+**Performance & Infrastructure**
+1. **WebSocket Confirmation**: Implement `signatureSubscribe` WebSocket for real-time transaction confirmation, reducing client response time
+2. **Webhook Integration**: Add QuickNode webhooks for automated database updates on transaction confirmation
+
+**Feature Expansion**
+3. **Multi-Token Support**: Extend beyond USDC to support other SPL tokens (SOL, USDT, etc.)
+4. **Analytics Dashboard**: Build comprehensive transaction analytics and reporting interface
+5. **Mobile Application**: Develop React Native mobile app leveraging the existing backend infrastructure
+
+**Subscription Management**
+6. **Advanced Features**: Implement recurring payments, plan upgrades/downgrades, and subscription cancellation workflows
 
 ### Learning Resources
 
